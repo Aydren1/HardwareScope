@@ -6,6 +6,9 @@ HardwareScope 1.6.5 adds a horizontal layout for the on-screen display.
 
 - Added an OSD **Layout** setting with **Vertical** and **Horizontal** options.
 - Horizontal mode places all selected sensor readings side-by-side in a single row.
+- Horizontal mode separates CPU, graphics, storage, memory, and system groups with a `│` divider.
+- Added **Tight**, **Normal**, and **Wide** horizontal-spacing choices.
+- Expanded OSD scaling to 50%–200% for finer size control.
 - Vertical mode preserves the existing stacked layout and remains the default.
 - OSD color, opacity, scale, position, hardware-name, and custom-position settings work in both layouts.
 - Retains the compact OSD introduced in version 1.6.4 without the redundant application heading.
