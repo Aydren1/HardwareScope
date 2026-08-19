@@ -14,7 +14,9 @@ HardwareScope is a lightweight, read-only Windows hardware monitor with live tem
 
 Use the [latest release](../../releases/latest) to download the current x64 Windows installer.
 
-Current release: **HardwareScope 1.6.4**
+Current release: **HardwareScope 1.6.5**
+
+Version 1.6.5 adds a fully horizontal OSD layout with Tight, Normal, or Wide spacing; 50–200% scaling; and NVIDIA-style `│` separators between CPU, GPU, storage, memory, and system readings.
 
 Version 1.6.4 removes the redundant HardwareScope heading from the on-screen display so selected sensor readings use less space.
 

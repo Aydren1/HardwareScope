@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out main
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: main
 
@@ -38,7 +38,9 @@ jobs:
             --pattern "SHA256SUMS.txt" \
             --dir release-assets
 
-          EXPECTED_HASH="$(awk -v file="$INSTALLER" '$2 == file { print toupper($1) }' release-assets/SHA256SUMS.txt)"
+          # Release checksums may be generated on Windows and use CRLF endings.
+          # Strip the carriage return before comparing the asset filename.
+          EXPECTED_HASH="$(tr -d '\r' < release-assets/SHA256SUMS.txt | awk -v file="$INSTALLER" '$2 == file { print toupper($1) }')"
           ACTUAL_HASH="$(sha256sum "release-assets/$INSTALLER" | awk '{ print toupper($1) }')"
           test -n "$EXPECTED_HASH"
           test "$ACTUAL_HASH" = "$EXPECTED_HASH"
