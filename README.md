@@ -14,7 +14,9 @@ HardwareScope is a lightweight, read-only Windows hardware monitor with live tem
 
 Use the [latest release](../../releases/latest) to download the current x64 Windows installer.
 
-Current release: **HardwareScope 1.6.2**
+Current release: **HardwareScope 1.6.3**
+
+Version 1.6.3 prevents automatic and manual updates from downloading concurrently, adds safe retries with unique temporary files, and validates both the installer size and SHA-256 checksum.
 
 Version 1.6.2 fixes Setup error 740 after interactive installation. The optional **Launch HardwareScope** action now uses the administrator credentials already approved for Setup.
 
