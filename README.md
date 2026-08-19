@@ -30,6 +30,8 @@ Hover over any table heading or sensor for one second to see a short plain-langu
 
 Settings includes manual and automatic stable updates. HardwareScope downloads new installers from the official GitHub release, verifies the published SHA-256 checksum, installs silently, and relaunches itself.
 
+The stable update manifest is published automatically only after GitHub has made the release installer public and the release workflow has verified its URL, byte size, and SHA-256 checksum. See [RELEASING.md](RELEASING.md).
+
 > HardwareScope is currently unsigned. Windows may display an **Unknown publisher** or SmartScreen warning. Verify the published SHA-256 checksum before installing.
 
 ## Requirements

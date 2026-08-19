@@ -1,0 +1,73 @@
+name: Publish verified update manifest
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: hardwarescope-update-manifest
+  cancel-in-progress: false
+
+jobs:
+  publish-manifest:
+    if: ${{ !github.event.release.draft && !github.event.release.prerelease }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Download and verify published release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          INSTALLER="HardwareScope-Setup-${VERSION}-x64.exe"
+
+          mkdir -p release-assets
+          gh release download "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "$INSTALLER" \
+            --pattern "SHA256SUMS.txt" \
+            --dir release-assets
+
+          EXPECTED_HASH="$(awk -v file="$INSTALLER" '$2 == file { print toupper($1) }' release-assets/SHA256SUMS.txt)"
+          ACTUAL_HASH="$(sha256sum "release-assets/$INSTALLER" | awk '{ print toupper($1) }')"
+          test -n "$EXPECTED_HASH"
+          test "$ACTUAL_HASH" = "$EXPECTED_HASH"
+
+          SIZE="$(stat -c%s "release-assets/$INSTALLER")"
+          INSTALLER_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${INSTALLER}"
+          curl --fail --location --silent --show-error --range 0-0 --output /dev/null "$INSTALLER_URL"
+
+          mkdir -p updates
+          printf '%s\n' \
+            '{' \
+            "  \"version\": \"$VERSION\"," \
+            '  "channel": "stable",' \
+            "  \"published\": \"$(date -u +%F)\"," \
+            "  \"installer\": \"$INSTALLER_URL\"," \
+            "  \"sha256\": \"$ACTUAL_HASH\"," \
+            "  \"size\": $SIZE," \
+            "  \"releaseNotes\": \"${{ github.event.release.html_url }}\"" \
+            '}' > updates/latest.json
+
+      - name: Commit verified manifest
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- updates/latest.json; then
+            echo "The verified update manifest is already current."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add updates/latest.json
+          git commit -m "Publish verified update manifest for ${{ github.event.release.tag_name }}"
+          git push origin HEAD:main
