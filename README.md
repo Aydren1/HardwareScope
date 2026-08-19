@@ -14,6 +14,8 @@ Current release: **HardwareScope 1.6.0**
 
 Version 1.6.0 improves sensor accuracy by separating live telemetry from fixed warning/critical thresholds, filtering duplicate or invalid readings, correcting units and labels, and keeping the app on the Windows taskbar when minimized.
 
+Settings includes manual and automatic stable updates. HardwareScope downloads new installers from the official GitHub release, verifies the published SHA-256 checksum, installs silently, and relaunches itself.
+
 > HardwareScope is currently unsigned. Windows may display an **Unknown publisher** or SmartScreen warning. Verify the published SHA-256 checksum before installing.
 
 ## Requirements
