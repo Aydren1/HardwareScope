@@ -3,6 +3,6 @@
   "channel": "stable",
   "published": "2026-08-19",
   "installer": "https://github.com/Aydren1/HardwareScope/releases/latest/download/HardwareScope-Setup-1.6.0-x64.exe",
-  "sha256": "876BCF267001A1A57C09091A4A1947A93CD0CD9CDBAACF94C9EC2A533E4BB2C8",
+  "sha256": "6FE1E0549F13839DA31CBA21B80EEE275E758C4E4785795ACEA337B7EF4A07A6",
   "releaseNotes": "https://github.com/Aydren1/HardwareScope/releases/latest"
 }
