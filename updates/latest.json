@@ -1,0 +1,8 @@
+{
+  "version": "1.5.0",
+  "channel": "stable",
+  "published": "2026-08-19",
+  "installer": "https://github.com/Aydren1/HardwareScope/releases/latest/download/HardwareScope-Setup-1.5.0-x64.exe",
+  "sha256": "0410A80A7DE376104B623F101FF337BB60706D61C673EC1B59149224FE80F327",
+  "releaseNotes": "https://github.com/Aydren1/HardwareScope/releases/latest"
+}
