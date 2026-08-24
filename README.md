@@ -14,7 +14,9 @@ HardwareScope is a lightweight, read-only Windows hardware monitor with live tem
 
 Use the [latest release](../../releases/latest) to download the current x64 Windows installer.
 
-Current release: **HardwareScope 1.6.5**
+Current release: **HardwareScope 1.7.0**
+
+Version 1.7.0 adds an optional live FPS counter for the foreground game or 3D application. FPS is pinned first in the OSD and has independent color and 50–200% scale controls. The bundled PresentMon capture engine starts only when FPS monitoring is enabled.
 
 Version 1.6.5 adds a fully horizontal OSD layout with Tight, Normal, or Wide spacing; 50–200% scaling; and NVIDIA-style `│` separators between CPU, GPU, storage, memory, and system readings.
 
