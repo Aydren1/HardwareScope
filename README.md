@@ -14,7 +14,9 @@ HardwareScope is a lightweight, read-only Windows hardware monitor with live tem
 
 Use the [latest release](../../releases/latest) to download the current x64 Windows installer.
 
-Current release: **HardwareScope 1.7.1**
+Current release: **HardwareScope 1.7.2**
+
+Version 1.7.2 makes the full non-interactive top header draggable in both application windows. It also replaces foreground-only FPS capture with an HWiNFO-style continuous PresentMon session that automatically follows the active 3D process with the highest frame rate. FPS reads are lock-free, rate-limited, memory-bounded, and cannot block the interface during high-frame-rate gameplay.
 
 Version 1.7.1 gives FPS its own low-latency refresh and smoothing controls, independent from temperature and hardware polling. It also replaces the separate Windows title bars with seamless draggable headers and matching in-app window controls.
 
