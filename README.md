@@ -14,7 +14,9 @@ HardwareScope is a lightweight, read-only Windows hardware monitor with live tem
 
 Use the [latest release](../../releases/latest) to download the current x64 Windows installer.
 
-Current release: **HardwareScope 1.7.3**
+Current release: **HardwareScope 1.7.4**
+
+Version 1.7.4 fixes the FPS counter staying at `-` in games. It replaces the unreliable PresentMon console/CSV child process with a narrowly filtered in-process Windows graphics trace, calculates FPS from original frame timestamps, follows the foreground 3D process, and keeps capture bounded and off the UI thread.
 
 Version 1.7.3 makes blank areas across the complete top headers genuinely draggable by giving the visually transparent WPF header surfaces an active hit-test background. The main window and Settings can now be moved from any non-interactive part of their headers.
 
