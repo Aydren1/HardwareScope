@@ -13,3 +13,9 @@
 
 - PresentMon still runs only while FPS monitoring is enabled.
 - Faster FPS display updates do not increase CPU, GPU, temperature, storage, or motherboard polling frequency.
+
+## Window design
+
+- Replaced the separate Windows title bars with seamless in-app window controls.
+- The main header and Settings header match their window backgrounds and can be dragged to move the window.
+- Minimize, maximize, restore, close, edge resizing, and double-click maximize behavior are preserved.
