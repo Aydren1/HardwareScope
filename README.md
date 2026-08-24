@@ -14,7 +14,9 @@ HardwareScope is a lightweight, read-only Windows hardware monitor with live tem
 
 Use the [latest release](../../releases/latest) to download the current x64 Windows installer.
 
-Current release: **HardwareScope 1.7.5**
+Current release: **HardwareScope 1.7.6**
+
+Version 1.7.6 adds default-on game-only FPS display and substantially reduces background capture work. FPS tracing stays completely off on the desktop, DXGI and Direct3D 9 events are filtered to the detected game process, and the graphics-kernel provider starts only as a delayed compatibility fallback.
 
 Version 1.7.5 fixes the automatic updater closing HardwareScope without reliably installing or reopening it. Updates now use a detached handoff that waits for the app to exit, runs the verified installer, records the result, and reopens HardwareScope only after installation completes.
 
