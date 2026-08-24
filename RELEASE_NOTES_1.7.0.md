@@ -4,9 +4,10 @@
 
 - Added an optional live FPS counter for the foreground game or 3D application.
 - Added FPS settings for enabling frame monitoring and automatically showing FPS in the OSD.
+- Added independent FPS color and 50–200% FPS scale controls.
 - Added a dedicated Frame rate section in the sensor table with current, minimum, and maximum FPS.
 - Bundled Intel PresentMon 2.4.1, so users do not need to install a separate FPS tool.
-- Horizontal OSD mode places FPS first and separates it from CPU/GPU readings with the existing NVIDIA-style divider.
+- FPS is always pinned first in both OSD layouts; horizontal mode separates it from CPU/GPU readings with the existing NVIDIA-style divider.
 
 ## Performance and behavior
 
