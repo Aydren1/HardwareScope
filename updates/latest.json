@@ -1,9 +1,9 @@
 {
-  "version": "1.7.4",
+  "version": "1.7.5",
   "channel": "stable",
   "published": "2026-08-24",
-  "installer": "https://github.com/Aydren1/HardwareScope/releases/download/v1.7.4/HardwareScope-Setup-1.7.4-x64.exe",
-  "sha256": "27B07FE1C2F60BAE36856C470CD8C6CD3D9EE572D1D5976FC359F733F86742BB",
-  "size": 78663668,
-  "releaseNotes": "https://github.com/Aydren1/HardwareScope/releases/tag/v1.7.4"
+  "installer": "https://github.com/Aydren1/HardwareScope/releases/download/v1.7.5/HardwareScope-Setup-1.7.5-x64.exe",
+  "sha256": "33F89B6952077FC6760674383B75AFCCCA8B2EA63EBCC9D5441E50EDEE470BDE",
+  "size": 78662360,
+  "releaseNotes": "https://github.com/Aydren1/HardwareScope/releases/tag/v1.7.5"
 }
