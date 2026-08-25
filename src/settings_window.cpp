@@ -407,7 +407,7 @@ void UpdateOwnerDrawMetrics(DialogState& state) noexcept {
     }
 }
 
-void LayoutControls(DialogState& state) noexcept {
+void LayoutControls(DialogState& state, const bool redraw = true) noexcept {
     auto defer = BeginDeferWindowPos(static_cast<int>(state.paged_controls.size()));
     for (const auto& record : state.paged_controls) {
         if (defer == nullptr) break;
@@ -419,7 +419,7 @@ void LayoutControls(DialogState& state) noexcept {
             Scale(state, record.y) - state.scroll_y,
             Scale(state, record.width),
             Scale(state, record.height),
-            SWP_NOACTIVATE | SWP_NOZORDER);
+            SWP_NOACTIVATE | SWP_NOZORDER | (redraw ? 0U : SWP_NOREDRAW));
     }
     if (defer != nullptr) static_cast<void>(EndDeferWindowPos(defer));
 }
@@ -467,8 +467,8 @@ void HandleScroll(DialogState& state, const int bar, const WPARAM wparam, const 
     information.fMask = SIF_POS;
     information.nPos = position;
     static_cast<void>(SetScrollInfo(state.window, bar, &information, TRUE));
-    LayoutControls(state);
-    InvalidateRect(state.window, nullptr, FALSE);
+    LayoutControls(state, false);
+    RedrawWindow(state.window, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN);
 }
 
 void BuildControls(DialogState& state) {
@@ -880,7 +880,7 @@ bool ShowSettingsWindow(const HWND owner, AppSettings& settings, const SensorSna
     const auto x = monitor_information.rcWork.left + (available_width - width) / 2;
     const auto y = monitor_information.rcWork.top + (available_height - height) / 2;
     state.window = CreateWindowExW(
-        WS_EX_DLGMODALFRAME,
+        WS_EX_DLGMODALFRAME | WS_EX_COMPOSITED,
         kClassName,
         L"HardwareScope settings",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_HSCROLL | WS_VSCROLL | WS_CLIPCHILDREN,

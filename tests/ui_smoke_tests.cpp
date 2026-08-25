@@ -329,11 +329,26 @@ int wmain(const int argument_count, wchar_t** arguments) {
     const auto sensor_list = FindWindowExW(settings, nullptr, L"LISTBOX", nullptr);
     const auto update_button = GetDlgItem(settings, hardwarescope::kSettingsCheckUpdatesCommand);
     if (tabs == nullptr || first_combo == nullptr || sensor_list == nullptr || update_button == nullptr || TabCtrl_GetItemCount(tabs) != 3
+        || (GetWindowLongPtrW(settings, GWL_EXSTYLE) & WS_EX_COMPOSITED) == 0
         || (GetWindowLongPtrW(tabs, GWL_STYLE) & TCS_OWNERDRAWFIXED) == 0
         || (GetWindowLongPtrW(first_combo, GWL_STYLE) & CBS_OWNERDRAWFIXED) == 0
         || (GetWindowLongPtrW(sensor_list, GWL_STYLE) & LBS_OWNERDRAWFIXED) == 0
         || (GetWindowLongPtrW(update_button, GWL_STYLE) & BS_OWNERDRAW) == 0) {
         std::cerr << "FAIL: settings pages or configurable OSD sensor list are missing\n";
+        return 1;
+    }
+    RECT tab_client{};
+    if (!GetClientRect(tabs, &tab_client) || tab_client.right <= tab_client.left || tab_client.bottom <= tab_client.top) {
+        std::cerr << "FAIL: Settings tab geometry is unavailable\n";
+        return 1;
+    }
+    const auto monitoring_tab_point = MAKELPARAM(
+        tab_client.left + (tab_client.right - tab_client.left) * 5 / 6,
+        tab_client.top + (tab_client.bottom - tab_client.top) / 2);
+    static_cast<void>(SendMessageW(tabs, WM_LBUTTONDOWN, MK_LBUTTON, monitoring_tab_point));
+    static_cast<void>(SendMessageW(tabs, WM_LBUTTONUP, 0U, monitoring_tab_point));
+    if (TabCtrl_GetCurSel(tabs) != 2 || !IsWindowVisible(sensor_list)) {
+        std::cerr << "FAIL: Monitoring tab did not expose the Additional OSD Sensors list\n";
         return 1;
     }
     RECT settings_before{};
@@ -354,6 +369,14 @@ int wmain(const int argument_count, wchar_t** arguments) {
         return 1;
     }
     static_cast<void>(SetWindowPos(settings, nullptr, settings_before.left, settings_before.top, 600, 450, SWP_NOACTIVATE | SWP_NOZORDER));
+    const auto monitoring_scroll_started = GetTickCount64();
+    for (int step = 0; step < 12; ++step) {
+        static_cast<void>(SendMessageW(settings, WM_MOUSEWHEEL, MAKEWPARAM(0, static_cast<WORD>(-WHEEL_DELTA)), 0U));
+    }
+    if (GetTickCount64() - monitoring_scroll_started > 1'000U || !IsWindowVisible(sensor_list)) {
+        std::cerr << "FAIL: buffered Monitoring-tab scrolling stalled or lost its sensor list\n";
+        return 1;
+    }
     SCROLLINFO vertical{sizeof(vertical), SIF_ALL};
     SCROLLINFO horizontal{sizeof(horizontal), SIF_ALL};
     if (!GetScrollInfo(settings, SB_VERT, &vertical) || !GetScrollInfo(settings, SB_HORZ, &horizontal)

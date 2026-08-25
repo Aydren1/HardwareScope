@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.28)
 
-project(HardwareScopeNative VERSION 2.0.1 LANGUAGES CXX RC)
+project(HardwareScopeNative VERSION 2.0.2 LANGUAGES CXX RC)
 
 configure_file(installer/HardwareScope.iss.in HardwareScope.iss @ONLY)
 
