@@ -21,7 +21,7 @@ BEGIN
             VALUE "FileDescription", "HardwareScope\0"
             VALUE "FileVersion", "@PROJECT_VERSION@.0\0"
             VALUE "InternalName", "HardwareScope\0"
-            VALUE "LegalCopyright", "Copyright (c) 2026 Aydren1 and HardwareScope contributors\0"
+            VALUE "LegalCopyright", "Copyright (c) 2026 Cero-SC and HardwareScope contributors\0"
             VALUE "ProductName", "HardwareScope\0"
             VALUE "ProductVersion", "@PROJECT_VERSION@\0"
         END

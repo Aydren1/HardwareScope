@@ -4,8 +4,8 @@
 
 # HardwareScope
 
-[![Windows CI](https://github.com/Aydren1/HardwareScope/actions/workflows/ci.yml/badge.svg)](https://github.com/Aydren1/HardwareScope/actions/workflows/ci.yml)
-[![Latest release](https://img.shields.io/github/v/release/Aydren1/HardwareScope)](https://github.com/Aydren1/HardwareScope/releases/latest)
+[![Windows CI](https://github.com/Cero-SC/HardwareScope/actions/workflows/ci.yml/badge.svg)](https://github.com/Cero-SC/HardwareScope/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/Cero-SC/HardwareScope)](https://github.com/Cero-SC/HardwareScope/releases/latest)
 
 HardwareScope is a lightweight, read-only Windows hardware monitor written in
 C++23 with Win32, Direct2D, and DirectWrite. It provides live hardware sensors,
@@ -14,7 +14,7 @@ runtime or managed UI framework.
 
 ## Download
 
-Open the [latest release](https://github.com/Aydren1/HardwareScope/releases/latest)
+Open the [latest release](https://github.com/Cero-SC/HardwareScope/releases/latest)
 and download `HardwareScope-Setup-<version>-x64.exe` under **Assets**.
 
 HardwareScope is currently unsigned. Windows may show an **Unknown publisher**

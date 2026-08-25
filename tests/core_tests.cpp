@@ -516,7 +516,7 @@ void TestUpdateManifestAndVerification() {
     constexpr std::string_view valid_manifest = R"({
         "version": "2.0.1",
         "channel": "stable",
-        "installer": "https://github.com/Aydren1/HardwareScope/releases/download/v2.0.1/HardwareScope-Setup-2.0.1-x64.exe",
+        "installer": "https://github.com/Cero-SC/HardwareScope/releases/download/v2.0.1/HardwareScope-Setup-2.0.1-x64.exe",
         "sha256": "BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD",
         "size": 3
     })";
@@ -525,7 +525,11 @@ void TestUpdateManifestAndVerification() {
     Expect(manifest.has_value() && manifest->installer_size == 3U, "updater manifest retains the verified installer size");
     Expect(hardwarescope::ParseSemanticVersion("v2.1.0") > hardwarescope::ParseSemanticVersion("2.0.9"), "semantic version comparison is numeric");
     Expect(!hardwarescope::ParseUpdateManifest(std::string{valid_manifest}.replace(valid_manifest.find("stable"), 6U, "beta  ")), "non-stable updater channels are rejected");
+    Expect(hardwarescope::IsTrustedInstallerUrl(L"https://github.com/Aydren1/HardwareScope/releases/download/v2.0.4/HardwareScope-Setup-2.0.4-x64.exe"),
+        "updater accepts the pre-rename release path during the compatibility migration");
     Expect(!hardwarescope::IsTrustedInstallerUrl(L"https://example.com/HardwareScope.exe"), "updater rejects installers outside the official GitHub release path");
+    Expect(!hardwarescope::IsTrustedInstallerUrl(L"https://github.com/Cero-SC/HardwareScope-malware/releases/download/v2.0.4/HardwareScope.exe"),
+        "updater rejects lookalike repository paths");
 
     const auto path = std::filesystem::temp_directory_path() / (L"HardwareScopeNativeHash-" + std::to_wstring(GetCurrentProcessId()) + L".bin");
     {

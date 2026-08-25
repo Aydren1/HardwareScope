@@ -73,8 +73,13 @@ std::optional<SemanticVersion> ParseSemanticVersion(std::string_view text) noexc
 }
 
 bool IsTrustedInstallerUrl(const std::wstring_view url) noexcept {
-    constexpr std::wstring_view prefix = L"https://github.com/Aydren1/HardwareScope/releases/download/";
-    if (!url.starts_with(prefix) || url.find(L"..") != std::wstring_view::npos) return false;
+    constexpr std::wstring_view current_prefix = L"https://github.com/Cero-SC/HardwareScope/releases/download/";
+    // HardwareScope 2.0.4 and earlier only trust this exact pre-rename path.
+    // Keep accepting it so the public manifest can bridge those installations
+    // to versions that know the current repository owner.
+    constexpr std::wstring_view legacy_prefix = L"https://github.com/Aydren1/HardwareScope/releases/download/";
+    const bool trusted_repository = url.starts_with(current_prefix) || url.starts_with(legacy_prefix);
+    if (!trusted_repository || url.find(L"..") != std::wstring_view::npos) return false;
     return url.ends_with(L".exe");
 }
 

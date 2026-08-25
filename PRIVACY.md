@@ -30,4 +30,4 @@ HardwareScope does not use either component to transmit sensor or frame data.
 ## Contact
 
 Privacy questions and reports can be submitted through the project's
-[GitHub issue tracker](https://github.com/Aydren1/HardwareScope/issues).
+[GitHub issue tracker](https://github.com/Cero-SC/HardwareScope/issues).

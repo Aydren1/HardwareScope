@@ -2,7 +2,7 @@
 
 HardwareScope releases are built from tagged source by GitHub Actions. Release
 artifacts must pass the project's deterministic tests and must originate from
-the public [HardwareScope repository](https://github.com/Aydren1/HardwareScope).
+the public [HardwareScope repository](https://github.com/Cero-SC/HardwareScope).
 Every signing request requires manual approval by the project approver.
 
 Free code signing provided by [SignPath.io](https://signpath.io/), certificate
@@ -15,8 +15,8 @@ describe an unsigned build as signed.
 
 ## Team roles
 
-- Author, committer, and reviewer: [Aydren1](https://github.com/Aydren1)
-- Signing approver: [Aydren1](https://github.com/Aydren1)
+- Author, committer, and reviewer: [Cero-SC](https://github.com/Cero-SC)
+- Signing approver: [Cero-SC](https://github.com/Cero-SC)
 - Automated update-manifest commits: `github-actions[bot]`
 
 Contributions from people who are not committers require review by the project

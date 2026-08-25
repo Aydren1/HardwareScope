@@ -47,6 +47,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.release.outputs.tag }}
+          # HardwareScope 2.0.4 and earlier only trust the exact pre-rename
+          # release path. GitHub redirects it to Cero-SC/HardwareScope. Keep
+          # publishing that path until the legacy-client migration is retired.
+          UPDATE_DOWNLOAD_REPOSITORY: Aydren1/HardwareScope
         run: |
           set -euo pipefail
           VERSION="${TAG#v}"
@@ -68,7 +72,7 @@ jobs:
           test "$ACTUAL_HASH" = "$EXPECTED_HASH"
 
           SIZE="$(stat -c%s "release-assets/$INSTALLER")"
-          INSTALLER_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${INSTALLER}"
+          INSTALLER_URL="https://github.com/${UPDATE_DOWNLOAD_REPOSITORY}/releases/download/${TAG}/${INSTALLER}"
           curl --fail --location --silent --show-error --range 0-0 --output /dev/null "$INSTALLER_URL"
 
           mkdir -p updates

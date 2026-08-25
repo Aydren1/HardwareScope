@@ -17,7 +17,7 @@ namespace {
 
 // Read the repository file directly so update checks do not depend on GitHub
 // Pages being enabled or having completed a separate deployment.
-constexpr wchar_t kManifestUrl[] = L"https://raw.githubusercontent.com/Aydren1/HardwareScope/main/updates/latest.json";
+constexpr wchar_t kManifestUrl[] = L"https://raw.githubusercontent.com/Cero-SC/HardwareScope/main/updates/latest.json";
 
 struct InternetHandle final {
     HINTERNET value{};

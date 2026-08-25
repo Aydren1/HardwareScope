@@ -38,3 +38,16 @@ that enforcement is active.
 
 If either workflow fails, leave the previous stable manifest unchanged, correct
 the source or automation, and rerun the failed workflow.
+
+## Repository-owner rename compatibility
+
+The GitHub owner changed from `Aydren1` to `Cero-SC` after version 2.0.4.
+HardwareScope 2.0.4 and earlier accept only installer URLs under the former
+owner name. GitHub currently redirects that release path to the current
+repository, so `publish-update-manifest.yml` intentionally keeps the legacy
+installer URL while verifying and publishing assets from `Cero-SC/HardwareScope`.
+
+New builds fetch the manifest from the current repository and trust release
+paths under either owner. Do not remove the legacy URL from the manifest or
+validator without an explicit migration plan for installations that have not
+yet upgraded past 2.0.4.
