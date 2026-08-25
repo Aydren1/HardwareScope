@@ -329,7 +329,7 @@ int wmain(const int argument_count, wchar_t** arguments) {
     const auto sensor_list = FindWindowExW(settings, nullptr, L"LISTBOX", nullptr);
     const auto update_button = GetDlgItem(settings, hardwarescope::kSettingsCheckUpdatesCommand);
     if (tabs == nullptr || first_combo == nullptr || sensor_list == nullptr || update_button == nullptr || TabCtrl_GetItemCount(tabs) != 3
-        || (GetWindowLongPtrW(settings, GWL_EXSTYLE) & WS_EX_COMPOSITED) == 0
+        || (GetWindowLongPtrW(settings, GWL_STYLE) & WS_CLIPCHILDREN) == 0
         || (GetWindowLongPtrW(tabs, GWL_STYLE) & TCS_OWNERDRAWFIXED) == 0
         || (GetWindowLongPtrW(first_combo, GWL_STYLE) & CBS_OWNERDRAWFIXED) == 0
         || (GetWindowLongPtrW(sensor_list, GWL_STYLE) & LBS_OWNERDRAWFIXED) == 0
@@ -351,6 +351,16 @@ int wmain(const int argument_count, wchar_t** arguments) {
         std::cerr << "FAIL: Monitoring tab did not expose the Additional OSD Sensors list\n";
         return 1;
     }
+    RECT default_client{};
+    SCROLLINFO default_vertical{sizeof(default_vertical), SIF_ALL};
+    static_cast<void>(GetClientRect(settings, &default_client));
+    static_cast<void>(GetScrollInfo(settings, SB_VERT, &default_vertical));
+    const auto default_content_height = MulDiv(650, static_cast<int>((std::max)(96U, GetDpiForWindow(settings))), 96);
+    if (default_client.bottom - default_client.top >= default_content_height
+        && default_vertical.nMax - default_vertical.nMin + 1 > static_cast<int>(default_vertical.nPage)) {
+        std::cerr << "FAIL: normally sized Settings exposes unnecessary outer-page scrolling\n";
+        return 1;
+    }
     RECT settings_before{};
     RECT tabs_before{};
     static_cast<void>(GetWindowRect(settings, &settings_before));
@@ -369,12 +379,14 @@ int wmain(const int argument_count, wchar_t** arguments) {
         return 1;
     }
     static_cast<void>(SetWindowPos(settings, nullptr, settings_before.left, settings_before.top, 600, 450, SWP_NOACTIVATE | SWP_NOZORDER));
+    const auto sensor_top_before = SendMessageW(sensor_list, LB_GETTOPINDEX, 0U, 0U);
     const auto monitoring_scroll_started = GetTickCount64();
     for (int step = 0; step < 12; ++step) {
         static_cast<void>(SendMessageW(settings, WM_MOUSEWHEEL, MAKEWPARAM(0, static_cast<WORD>(-WHEEL_DELTA)), 0U));
     }
-    if (GetTickCount64() - monitoring_scroll_started > 1'000U || !IsWindowVisible(sensor_list)) {
-        std::cerr << "FAIL: buffered Monitoring-tab scrolling stalled or lost its sensor list\n";
+    if (GetTickCount64() - monitoring_scroll_started > 1'000U || !IsWindowVisible(sensor_list)
+        || SendMessageW(sensor_list, LB_GETTOPINDEX, 0U, 0U) != sensor_top_before) {
+        std::cerr << "FAIL: Monitoring page scrolling stalled or scrolled inside its OSD sensor list\n";
         return 1;
     }
     SCROLLINFO vertical{sizeof(vertical), SIF_ALL};

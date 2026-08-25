@@ -284,7 +284,7 @@ HWND AddControl(DialogState& state, const wchar_t* const type, const wchar_t* co
         0U,
         type,
         text,
-        WS_CHILD | WS_VISIBLE | style,
+        WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | style,
         Scale(state, x) - state.scroll_x,
         Scale(state, y) - state.scroll_y,
         Scale(state, width),
@@ -407,7 +407,7 @@ void UpdateOwnerDrawMetrics(DialogState& state) noexcept {
     }
 }
 
-void LayoutControls(DialogState& state, const bool redraw = true) noexcept {
+void LayoutControls(DialogState& state) noexcept {
     auto defer = BeginDeferWindowPos(static_cast<int>(state.paged_controls.size()));
     for (const auto& record : state.paged_controls) {
         if (defer == nullptr) break;
@@ -419,7 +419,7 @@ void LayoutControls(DialogState& state, const bool redraw = true) noexcept {
             Scale(state, record.y) - state.scroll_y,
             Scale(state, record.width),
             Scale(state, record.height),
-            SWP_NOACTIVATE | SWP_NOZORDER | (redraw ? 0U : SWP_NOREDRAW));
+            SWP_NOACTIVATE | SWP_NOZORDER);
     }
     if (defer != nullptr) static_cast<void>(EndDeferWindowPos(defer));
 }
@@ -462,13 +462,23 @@ void HandleScroll(DialogState& state, const int bar, const WPARAM wparam, const 
     }
     const auto maximum = std::max(0, information.nMax - static_cast<int>(information.nPage) + 1);
     position = std::clamp(position, 0, maximum);
+    const auto previous_x = state.scroll_x;
+    const auto previous_y = state.scroll_y;
     if (bar == SB_HORZ) state.scroll_x = position;
     else state.scroll_y = position;
+    if (state.scroll_x == previous_x && state.scroll_y == previous_y) return;
     information.fMask = SIF_POS;
     information.nPos = position;
     static_cast<void>(SetScrollInfo(state.window, bar, &information, TRUE));
-    LayoutControls(state, false);
-    RedrawWindow(state.window, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN);
+    static_cast<void>(ScrollWindowEx(
+        state.window,
+        previous_x - state.scroll_x,
+        previous_y - state.scroll_y,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        SW_SCROLLCHILDREN | SW_INVALIDATE));
 }
 
 void BuildControls(DialogState& state) {
@@ -871,19 +881,26 @@ bool ShowSettingsWindow(const HWND owner, AppSettings& settings, const SensorSna
     monitor_information.cbSize = sizeof(monitor_information);
     const auto monitor = MonitorFromWindow(owner, MONITOR_DEFAULTTONEAREST);
     if (!GetMonitorInfoW(monitor, &monitor_information)) static_cast<void>(SystemParametersInfoW(SPI_GETWORKAREA, 0U, &monitor_information.rcWork, 0U));
-    const auto desired_width = Scale(state, kLogicalDialogWidth);
-    const auto desired_height = Scale(state, kLogicalDialogHeight);
-    const auto available_width = std::max(480, static_cast<int>(monitor_information.rcWork.right - monitor_information.rcWork.left));
-    const auto available_height = std::max(400, static_cast<int>(monitor_information.rcWork.bottom - monitor_information.rcWork.top));
+    constexpr DWORD window_ex_style = WS_EX_DLGMODALFRAME;
+    constexpr DWORD window_style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_HSCROLL | WS_VSCROLL | WS_CLIPCHILDREN;
+    RECT desired_frame{0, 0, Scale(state, kLogicalDialogWidth), Scale(state, kLogicalDialogHeight)};
+    if (!AdjustWindowRectExForDpi(&desired_frame, window_style, FALSE, window_ex_style, state.dpi)) {
+        desired_frame.right = Scale(state, kLogicalDialogWidth);
+        desired_frame.bottom = Scale(state, kLogicalDialogHeight);
+    }
+    const auto desired_width = static_cast<int>(desired_frame.right - desired_frame.left);
+    const auto desired_height = static_cast<int>(desired_frame.bottom - desired_frame.top);
+    const auto available_width = std::max(1, static_cast<int>(monitor_information.rcWork.right - monitor_information.rcWork.left));
+    const auto available_height = std::max(1, static_cast<int>(monitor_information.rcWork.bottom - monitor_information.rcWork.top));
     const auto width = std::min(desired_width, available_width);
     const auto height = std::min(desired_height, available_height);
     const auto x = monitor_information.rcWork.left + (available_width - width) / 2;
     const auto y = monitor_information.rcWork.top + (available_height - height) / 2;
     state.window = CreateWindowExW(
-        WS_EX_DLGMODALFRAME | WS_EX_COMPOSITED,
+        window_ex_style,
         kClassName,
         L"HardwareScope settings",
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_HSCROLL | WS_VSCROLL | WS_CLIPCHILDREN,
+        window_style,
         x,
         y,
         width,
