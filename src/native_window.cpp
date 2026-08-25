@@ -34,6 +34,23 @@ constexpr float kColumnHeaderHeight = 29.0F;
 constexpr float kSensorRowHeight = 31.0F;
 const GUID kTrayIconGuid{0xE58BB907, 0x9AEF, 0x4E50, {0x9D, 0x2F, 0x5A, 0x65, 0xB4, 0xB4, 0x2D, 0x40}};
 
+HICON LoadHardwareScopeIcon(
+    const HINSTANCE instance,
+    const UINT dpi,
+    const int width_metric,
+    const int height_metric) noexcept {
+    const auto effective_dpi = dpi == 0U ? 96U : dpi;
+    const auto width = std::max(1, GetSystemMetricsForDpi(width_metric, effective_dpi));
+    const auto height = std::max(1, GetSystemMetricsForDpi(height_metric, effective_dpi));
+    return static_cast<HICON>(LoadImageW(
+        instance,
+        MAKEINTRESOURCEW(101),
+        IMAGE_ICON,
+        width,
+        height,
+        LR_DEFAULTCOLOR | LR_SHARED));
+}
+
 using TableColumns = std::array<float, 7>;
 
 TableColumns CalculateTableColumns(const float left, const float table_width) noexcept {
@@ -243,8 +260,9 @@ bool NativeWindow::RegisterWindowClass() {
     window_class.lpfnWndProc = &NativeWindow::StaticWindowProcedure;
     window_class.hInstance = instance_;
     window_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    window_class.hIcon = static_cast<HICON>(LoadImageW(instance_, MAKEINTRESOURCEW(101), IMAGE_ICON, 0, 0, LR_DEFAULTSIZE));
-    window_class.hIconSm = static_cast<HICON>(LoadImageW(instance_, MAKEINTRESOURCEW(101), IMAGE_ICON, 16, 16, 0));
+    const auto system_dpi = GetDpiForSystem();
+    window_class.hIcon = LoadHardwareScopeIcon(instance_, system_dpi, SM_CXICON, SM_CYICON);
+    window_class.hIconSm = LoadHardwareScopeIcon(instance_, system_dpi, SM_CXSMICON, SM_CYSMICON);
     window_class.lpszClassName = kWindowClass;
     return RegisterClassExW(&window_class) != 0 || GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
 }
@@ -277,6 +295,7 @@ bool NativeWindow::CreateNativeWindow(const int show_command) {
     if (window_ == nullptr) return false;
 
     dpi_ = GetDpiForWindow(window_);
+    RefreshWindowIcons();
     ApplyDwmAppearance();
     taskbar_created_message_ = RegisterWindowMessageW(L"TaskbarCreated");
     static_cast<void>(AddTrayIcon());
@@ -290,6 +309,25 @@ bool NativeWindow::CreateNativeWindow(const int show_command) {
         UpdateWindow(window_);
     }
     return true;
+}
+
+void NativeWindow::RefreshWindowIcons() noexcept {
+    if (window_ == nullptr) return;
+    const auto large_icon = LoadHardwareScopeIcon(instance_, dpi_, SM_CXICON, SM_CYICON);
+    const auto small_icon = LoadHardwareScopeIcon(instance_, dpi_, SM_CXSMICON, SM_CYSMICON);
+    if (large_icon != nullptr) static_cast<void>(SendMessageW(window_, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(large_icon)));
+    if (small_icon != nullptr) static_cast<void>(SendMessageW(window_, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(small_icon)));
+
+    if (tray_icon_added_ && small_icon != nullptr) {
+        NOTIFYICONDATAW icon{};
+        icon.cbSize = sizeof(icon);
+        icon.hWnd = window_;
+        icon.uID = 1U;
+        icon.uFlags = NIF_ICON | NIF_GUID;
+        icon.hIcon = small_icon;
+        icon.guidItem = kTrayIconGuid;
+        static_cast<void>(Shell_NotifyIconW(NIM_MODIFY, &icon));
+    }
 }
 
 LRESULT CALLBACK NativeWindow::StaticWindowProcedure(const HWND window, const UINT message, const WPARAM wparam, const LPARAM lparam) noexcept {
@@ -336,6 +374,7 @@ LRESULT NativeWindow::WindowProcedure(const UINT message, const WPARAM wparam, c
         dpi_ = HIWORD(wparam);
         const auto* suggested = reinterpret_cast<const RECT*>(lparam);
         SetWindowPos(window_, nullptr, suggested->left, suggested->top, suggested->right - suggested->left, suggested->bottom - suggested->top, SWP_NOACTIVATE | SWP_NOZORDER);
+        RefreshWindowIcons();
         DiscardDeviceResources();
         osd_window_.DisplayChanged();
         fps_osd_window_.DisplayChanged();
@@ -1096,7 +1135,8 @@ bool NativeWindow::AddTrayIcon() noexcept {
     icon.uID = 1U;
     icon.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_GUID | NIF_SHOWTIP;
     icon.uCallbackMessage = kTrayMessage;
-    icon.hIcon = LoadIconW(instance_, MAKEINTRESOURCEW(101));
+    icon.hIcon = LoadHardwareScopeIcon(instance_, dpi_, SM_CXSMICON, SM_CYSMICON);
+    if (icon.hIcon == nullptr) icon.hIcon = LoadIconW(instance_, MAKEINTRESOURCEW(101));
     icon.guidItem = kTrayIconGuid;
     static_cast<void>(wcscpy_s(icon.szTip, L"HardwareScope"));
     if (!Shell_NotifyIconW(NIM_ADD, &icon)) return false;

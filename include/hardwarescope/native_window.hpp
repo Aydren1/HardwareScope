@@ -54,6 +54,7 @@ private:
 
     bool RegisterWindowClass();
     bool CreateNativeWindow(int show_command);
+    void RefreshWindowIcons() noexcept;
     bool CreateDeviceResources();
     void DiscardDeviceResources() noexcept;
     void ClearTextLayoutCache() noexcept;

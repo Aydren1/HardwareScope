@@ -907,13 +907,27 @@ bool ShowSettingsWindow(const HWND owner, AppSettings& settings, const SensorSna
     static_cast<void>(InitCommonControlsEx(&common_controls));
 
     const auto instance = GetModuleHandleW(nullptr);
+    auto owner_dpi = GetDpiForWindow(owner);
+    if (owner_dpi == 0U) owner_dpi = 96U;
     WNDCLASSEXW window_class{};
     window_class.cbSize = sizeof(window_class);
     window_class.lpfnWndProc = &WindowProcedure;
     window_class.hInstance = instance;
     window_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    window_class.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(101));
-    window_class.hIconSm = static_cast<HICON>(LoadImageW(instance, MAKEINTRESOURCEW(101), IMAGE_ICON, 16, 16, LR_SHARED));
+    window_class.hIcon = static_cast<HICON>(LoadImageW(
+        instance,
+        MAKEINTRESOURCEW(101),
+        IMAGE_ICON,
+        GetSystemMetricsForDpi(SM_CXICON, owner_dpi),
+        GetSystemMetricsForDpi(SM_CYICON, owner_dpi),
+        LR_DEFAULTCOLOR | LR_SHARED));
+    window_class.hIconSm = static_cast<HICON>(LoadImageW(
+        instance,
+        MAKEINTRESOURCEW(101),
+        IMAGE_ICON,
+        GetSystemMetricsForDpi(SM_CXSMICON, owner_dpi),
+        GetSystemMetricsForDpi(SM_CYSMICON, owner_dpi),
+        LR_DEFAULTCOLOR | LR_SHARED));
     window_class.lpszClassName = kClassName;
     if (RegisterClassExW(&window_class) == 0 && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return false;
 
@@ -921,8 +935,7 @@ bool ShowSettingsWindow(const HWND owner, AppSettings& settings, const SensorSna
     state.owner = owner;
     state.draft = settings;
     state.snapshot = &snapshot;
-    state.dpi = GetDpiForWindow(owner);
-    if (state.dpi == 0U) state.dpi = 96U;
+    state.dpi = owner_dpi;
     state.palette = PaletteFor(state.draft.theme, state.draft.text_color_rgb);
     RecreateFont(state);
     RecreateBrushes(state);
