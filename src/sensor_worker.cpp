@@ -1,0 +1,278 @@
+#include "hardwarescope/sensor_worker.hpp"
+#include "hardwarescope/game_detector.hpp"
+
+#include <windows.h>
+
+#include <algorithm>
+#include <cmath>
+#include <condition_variable>
+#include <cwchar>
+#include <memory>
+#include <mutex>
+#include <new>
+
+namespace hardwarescope {
+namespace {
+
+void CopyText(auto& destination, const wchar_t* source) noexcept {
+    static_cast<void>(wcsncpy_s(destination.data(), destination.size(), source, _TRUNCATE));
+}
+
+SensorValue MakeSensor(
+    const std::uint64_t id,
+    const SensorKind kind,
+    const SensorUnit unit,
+    const wchar_t* name,
+    const wchar_t* hardware,
+    const double current,
+    const double minimum,
+    const double maximum) noexcept {
+    SensorValue value{};
+    value.id = id;
+    value.kind = kind;
+    value.unit = unit;
+    value.available = true;
+    CopyText(value.name, name);
+    CopyText(value.hardware, hardware);
+    value.current = current;
+    value.minimum = minimum;
+    value.maximum = maximum;
+    return value;
+}
+
+bool IsProcessElevated() noexcept {
+    HANDLE token{};
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return false;
+    TOKEN_ELEVATION elevation{};
+    DWORD size{};
+    const auto success = GetTokenInformation(token, TokenElevation, &elevation, sizeof(elevation), &size);
+    CloseHandle(token);
+    return success && elevation.TokenIsElevated != 0U;
+}
+
+} // namespace
+
+struct SensorWorker::Workspace final {
+    SensorSnapshot bridge_probe{};
+    SensorSnapshot last_hardware_snapshot{};
+    SensorSnapshot publish_snapshot{};
+};
+
+std::chrono::milliseconds SelectSensorPublishInterval(
+    const std::chrono::milliseconds hardware_interval,
+    const std::uint32_t fps_refresh_interval_ms,
+    const bool fps_enabled,
+    const bool fps_game_only,
+    const bool frame_rate_available) noexcept {
+    if (!fps_enabled || (fps_game_only && !frame_rate_available)) return hardware_interval;
+    return std::min(hardware_interval, std::chrono::milliseconds{fps_refresh_interval_ms});
+}
+
+SensorWorker::SensorWorker(
+    SnapshotStore& store,
+    const SnapshotPublishedCallback callback,
+    void* const context,
+    const SensorWorkerMode mode,
+    const HINSTANCE resources) noexcept
+    : store_(store),
+      callback_(callback),
+      callback_context_(context),
+      mode_(mode),
+      resources_(resources),
+      workspace_(new (std::nothrow) Workspace{}) {}
+
+SensorWorker::~SensorWorker() {
+    Stop();
+}
+
+void SensorWorker::Start(std::chrono::milliseconds interval) {
+    if (running_.exchange(true, std::memory_order_acq_rel)) return;
+    privileged_status_.store(PrivilegedSensorStatus::starting, std::memory_order_release);
+    interval = std::clamp(interval, std::chrono::milliseconds{100}, std::chrono::milliseconds{10'000});
+    thread_ = std::jthread([this, interval](const std::stop_token stop_token) { Run(stop_token, interval); });
+}
+
+void SensorWorker::Stop() noexcept {
+    if (!running_.exchange(false, std::memory_order_acq_rel)) return;
+    if (thread_.joinable()) {
+        thread_.request_stop();
+        thread_.join();
+    }
+}
+
+bool SensorWorker::Running() const noexcept {
+    return running_.load(std::memory_order_acquire);
+}
+
+PrivilegedSensorStatus SensorWorker::PrivilegedStatus() const noexcept {
+    return privileged_status_.load(std::memory_order_acquire);
+}
+
+void SensorWorker::ConfigureFps(
+    const bool enabled,
+    const bool game_only,
+    const std::uint32_t refresh_interval_ms,
+    const std::uint32_t smoothing_interval_ms) noexcept {
+    if (Running()) return;
+    fps_enabled_ = enabled;
+    fps_game_only_ = game_only;
+    fps_refresh_interval_ms_ = std::clamp(refresh_interval_ms, 50U, 500U);
+    fps_smoothing_interval_ms_ = std::clamp(smoothing_interval_ms, 250U, 1'250U);
+}
+
+void SensorWorker::Run(const std::stop_token stop_token, const std::chrono::milliseconds interval) noexcept {
+    if (workspace_ == nullptr) {
+        running_.store(false, std::memory_order_release);
+        return;
+    }
+    static_cast<void>(SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL));
+    std::condition_variable_any wake;
+    std::mutex wake_mutex;
+    std::uint64_t sequence = 0;
+    if (mode_ == SensorWorkerMode::native) static_cast<void>(nvidia_provider_.Initialize());
+    if (mode_ == SensorWorkerMode::native) static_cast<void>(amd_gpu_provider_.Initialize());
+    if (mode_ == SensorWorkerMode::native) {
+        ResetSnapshot(workspace_->bridge_probe);
+        if (privileged_bridge_.Collect(workspace_->bridge_probe)) {
+            privileged_status_.store(PrivilegedSensorStatus::service_connected, std::memory_order_release);
+        } else if (IsProcessElevated() && privileged_collector_.Initialize(resources_)) {
+            privileged_status_.store(PrivilegedSensorStatus::direct_access, std::memory_order_release);
+        } else {
+            privileged_status_.store(PrivilegedSensorStatus::unavailable, std::memory_order_release);
+        }
+    }
+    ResetSnapshot(workspace_->last_hardware_snapshot);
+    auto next_hardware_refresh = std::chrono::steady_clock::time_point{};
+
+    while (!stop_token.stop_requested()) {
+        auto& snapshot = workspace_->publish_snapshot;
+        ResetSnapshot(snapshot);
+        bool frame_rate_available{};
+        bool game_target_active{};
+        if (mode_ == SensorWorkerMode::native) {
+            const auto game = fps_enabled_ ? FindGameProcess(GetCurrentProcessId()) : GameProcess{};
+            game_target_active = game.process_id != 0U;
+            static_cast<void>(privileged_bridge_.SetFpsTarget(game.process_id, fps_smoothing_interval_ms_));
+            const auto now = std::chrono::steady_clock::now();
+            auto& hardware = workspace_->last_hardware_snapshot;
+            if (hardware.sequence == 0U || now >= next_hardware_refresh) {
+                CollectNative(++sequence, hardware);
+                next_hardware_refresh = now + interval;
+            } else {
+                ++sequence;
+            }
+            CopySnapshot(hardware, snapshot);
+            snapshot.sequence = sequence;
+            if (fps_enabled_) {
+                const auto new_end = std::remove_if(snapshot.sensors.begin(), snapshot.sensors.begin() + snapshot.count, [](const SensorValue& sensor) {
+                    return sensor.kind == SensorKind::frame_rate;
+                });
+                snapshot.count = static_cast<std::uint32_t>(new_end - snapshot.sensors.begin());
+                SensorValue frame{};
+                if (privileged_bridge_.CollectFrameRate(frame) && snapshot.count < snapshot.sensors.size()) {
+                    frame_rate_available = true;
+                    snapshot.sensors[snapshot.count++] = frame;
+                }
+            }
+        } else {
+            CollectSynthetic(++sequence, snapshot);
+        }
+        ApplyHistory(snapshot);
+        store_.Publish(snapshot);
+        if (callback_ != nullptr) callback_(callback_context_, sequence);
+
+        const auto publish_interval = mode_ == SensorWorkerMode::native
+            ? SelectSensorPublishInterval(interval, fps_refresh_interval_ms_, fps_enabled_, fps_game_only_, frame_rate_available || game_target_active)
+            : interval;
+        std::unique_lock lock(wake_mutex);
+        static_cast<void>(wake.wait_for(lock, stop_token, publish_interval, [] { return false; }));
+    }
+    static_cast<void>(privileged_bridge_.SetFpsTarget(0U, fps_smoothing_interval_ms_));
+    storage_provider_.Reset();
+    nvidia_provider_.Close();
+    amd_gpu_provider_.Close();
+    privileged_collector_.Close();
+    privileged_bridge_.Close();
+}
+
+void SensorWorker::CollectNative(const std::uint64_t sequence, SensorSnapshot& snapshot) noexcept {
+    LARGE_INTEGER frequency{};
+    LARGE_INTEGER started{};
+    LARGE_INTEGER finished{};
+    QueryPerformanceFrequency(&frequency);
+    QueryPerformanceCounter(&started);
+
+    ResetSnapshot(snapshot);
+    snapshot.sequence = sequence;
+    snapshot.captured_qpc = static_cast<std::uint64_t>(started.QuadPart);
+    system_provider_.Collect(snapshot);
+    storage_provider_.Collect(snapshot);
+    nvidia_provider_.Collect(snapshot);
+    amd_gpu_provider_.Collect(snapshot);
+    if (privileged_bridge_.Collect(snapshot)) {
+        privileged_status_.store(PrivilegedSensorStatus::service_connected, std::memory_order_release);
+    } else if (privileged_collector_.Available()) {
+        privileged_collector_.Collect(snapshot);
+        privileged_status_.store(PrivilegedSensorStatus::direct_access, std::memory_order_release);
+    } else {
+        privileged_status_.store(PrivilegedSensorStatus::unavailable, std::memory_order_release);
+    }
+
+    QueryPerformanceCounter(&finished);
+    const auto ticks = static_cast<std::uint64_t>(finished.QuadPart - started.QuadPart);
+    snapshot.collection_microseconds = frequency.QuadPart > 0
+        ? static_cast<std::uint32_t>((ticks * 1'000'000ULL) / static_cast<std::uint64_t>(frequency.QuadPart))
+        : 0U;
+}
+
+void SensorWorker::ApplyHistory(SensorSnapshot& snapshot) noexcept {
+    for (std::uint32_t sensor_index = 0; sensor_index < snapshot.count; ++sensor_index) {
+        auto& sensor = snapshot.sensors[sensor_index];
+        auto existing = std::find_if(history_.begin(), history_.begin() + history_count_, [&](const HistoryEntry& history) { return history.id == sensor.id; });
+        if (existing == history_.begin() + history_count_) {
+            if (history_count_ >= history_.size()) continue;
+            existing = history_.begin() + history_count_++;
+            *existing = HistoryEntry{sensor.id, sensor.current, sensor.current};
+        } else {
+            existing->minimum = std::min(existing->minimum, sensor.current);
+            existing->maximum = std::max(existing->maximum, sensor.current);
+        }
+        sensor.minimum = existing->minimum;
+        sensor.maximum = existing->maximum;
+    }
+}
+
+void SensorWorker::CollectSynthetic(const std::uint64_t sequence, SensorSnapshot& snapshot) noexcept {
+    LARGE_INTEGER frequency{};
+    LARGE_INTEGER started{};
+    LARGE_INTEGER finished{};
+    QueryPerformanceFrequency(&frequency);
+    QueryPerformanceCounter(&started);
+
+    const auto phase = static_cast<double>(sequence) * 0.12;
+    const auto cpu_temperature = 52.0 + std::sin(phase) * 3.2;
+    const auto gpu_temperature = 44.0 + std::sin(phase * 0.73) * 2.1;
+    const auto gpu_memory_temperature = 56.0 + std::sin(phase * 0.61) * 2.8;
+    const auto cpu_usage = 11.0 + (std::sin(phase * 1.4) + 1.0) * 9.0;
+    const auto gpu_usage = 7.0 + (std::sin(phase * 1.1) + 1.0) * 6.0;
+
+    ResetSnapshot(snapshot);
+    snapshot.sequence = sequence;
+    snapshot.captured_qpc = static_cast<std::uint64_t>(started.QuadPart);
+    snapshot.sensors[0] = MakeSensor(1, SensorKind::temperature, SensorUnit::celsius, L"Core (Tctl/Tdie)", L"AMD Ryzen CPU", cpu_temperature, 38.4, 67.2);
+    snapshot.sensors[1] = MakeSensor(2, SensorKind::temperature, SensorUnit::celsius, L"GPU Core temperature", L"NVIDIA GeForce GPU", gpu_temperature, 34.1, 61.0);
+    snapshot.sensors[2] = MakeSensor(3, SensorKind::temperature, SensorUnit::celsius, L"GPU Memory Junction", L"NVIDIA GeForce GPU", gpu_memory_temperature, 42.0, 72.3);
+    snapshot.sensors[3] = MakeSensor(4, SensorKind::utilization, SensorUnit::percent, L"CPU Total", L"AMD Ryzen CPU", cpu_usage, 0.4, 72.1);
+    snapshot.sensors[4] = MakeSensor(5, SensorKind::utilization, SensorUnit::percent, L"GPU Core", L"NVIDIA GeForce GPU", gpu_usage, 0.0, 98.0);
+    snapshot.sensors[5] = MakeSensor(6, SensorKind::clock, SensorUnit::megahertz, L"CPU Core Average", L"AMD Ryzen CPU", 4875.0 + std::sin(phase) * 125.0, 550.0, 5200.0);
+    snapshot.sensors[6] = MakeSensor(7, SensorKind::power, SensorUnit::watts, L"CPU Package", L"AMD Ryzen CPU", 48.0 + std::sin(phase * 0.8) * 7.0, 18.0, 142.0);
+    snapshot.count = 7;
+
+    QueryPerformanceCounter(&finished);
+    const auto ticks = static_cast<std::uint64_t>(finished.QuadPart - started.QuadPart);
+    snapshot.collection_microseconds = frequency.QuadPart > 0
+        ? static_cast<std::uint32_t>((ticks * 1'000'000ULL) / static_cast<std::uint64_t>(frequency.QuadPart))
+        : 0U;
+}
+
+} // namespace hardwarescope

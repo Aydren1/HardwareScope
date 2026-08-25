@@ -1,0 +1,44 @@
+name: Windows CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Configure x64 Release
+        run: >-
+          cmake -S . -B out/build/x64-release
+          -G "Visual Studio 17 2022" -A x64
+          -DBUILD_TESTING=ON
+
+      - name: Build x64 Release
+        shell: pwsh
+        run: |
+          $targets = @(
+            'HardwareScopeNative',
+            'HardwareScopeNativeSensorService',
+            'HardwareScopeNativeTests',
+            'HardwareScopeNativeUpdaterRecoveryTests'
+          )
+          foreach ($target in $targets) {
+            cmake --build out/build/x64-release --config Release --target $target
+            if ($LASTEXITCODE -ne 0) { throw "Build failed for $target" }
+          }
+
+      - name: Run deterministic tests
+        run: ctest --test-dir out/build/x64-release -C Release --output-on-failure

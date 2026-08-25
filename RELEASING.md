@@ -1,15 +1,23 @@
-# HardwareScope release order
+# Releasing HardwareScope
 
-HardwareScope must never announce an update before its installer is publicly downloadable.
+HardwareScope releases are built by GitHub Actions from the tagged source. The
+stable update manifest is changed only after GitHub has published and verified
+the release assets.
 
-## Required order
+## Release process
 
-1. Build the versioned application, installer, release ZIP, and `SHA256SUMS.txt`.
-2. Create the GitHub release as a draft and upload every release asset.
-3. Publish the stable GitHub release.
-4. Let **Publish verified update manifest** download the public installer, validate its SHA-256 checksum, verify that its URL responds, and update `updates/latest.json`.
-5. Update the download-page text after the release is public.
+1. Update the version in `CMakeLists.txt` and add `RELEASE_NOTES_<version>.md`.
+2. Merge the tested changes into `main`.
+3. Create and push the matching tag, for example `v2.0.0`.
+4. The **Build and publish release** workflow builds and tests the Windows x64
+   application, installer, portable ZIP, and checksums.
+5. The workflow publishes those files as the GitHub release assets.
+6. The **Publish verified update manifest** workflow downloads the public
+   installer, verifies its name, size, URL, and SHA-256 checksum, then commits
+   the new `updates/latest.json` to `main`.
 
-Do not manually point `updates/latest.json` at a draft or unpublished release. The release workflow owns the stable updater manifest.
+Never point `updates/latest.json` at a draft, local file, or asset that has not
+been downloaded and verified from the public GitHub release.
 
-If the workflow fails, keep the previous manifest unchanged. Fix the release assets and rerun the release process; never advertise an unverified installer.
+If either workflow fails, leave the previous stable manifest unchanged, correct
+the source or automation, and rerun the failed workflow.

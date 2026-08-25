@@ -1,0 +1,13 @@
+/.hardwarescope-native-v2-work/
+/out/
+/_CPack_Packages/
+/.vs/
+/CMakeUserPresets.json
+*.user
+*.suo
+*.pdb
+*.obj
+*.lib
+*.exp
+*.ilk
+*.zip

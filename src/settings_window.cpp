@@ -1,0 +1,915 @@
+#include "hardwarescope/settings_window.hpp"
+#include "hardwarescope/app_commands.hpp"
+#include "hardwarescope/ui_palette.hpp"
+#include "hardwarescope/update_coordinator.hpp"
+
+#include <commctrl.h>
+#include <dwmapi.h>
+#include <uxtheme.h>
+#include <windowsx.h>
+
+#include <algorithm>
+#include <array>
+#include <cstdlib>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace hardwarescope {
+namespace {
+
+constexpr wchar_t kClassName[] = L"HardwareScope.Native.SettingsWindow";
+constexpr int kSave = 1;
+constexpr int kCancel = 2;
+constexpr int kTabs = 10;
+constexpr int kLogicalDialogWidth = 710;
+constexpr int kLogicalDialogHeight = 690;
+constexpr int kLogicalContentWidth = 650;
+constexpr int kLogicalContentHeight = 650;
+
+COLORREF WinColor(const std::uint32_t rgb) noexcept {
+    return RGB((rgb >> 16U) & 0xFFU, (rgb >> 8U) & 0xFFU, rgb & 0xFFU);
+}
+
+struct DialogState final {
+    struct ControlRecord final {
+        HWND window{};
+        int page{};
+        int x{};
+        int y{};
+        int width{};
+        int height{};
+    };
+
+    HWND owner{};
+    HWND window{};
+    AppSettings draft{};
+    const SensorSnapshot* snapshot{};
+    HFONT font{};
+    HBRUSH background_brush{};
+    HBRUSH field_brush{};
+    HBRUSH surface_brush{};
+    HBRUSH hover_brush{};
+    HBRUSH selection_brush{};
+    HBRUSH line_brush{};
+    HBRUSH accent_brush{};
+    UiPalette palette{};
+    bool done{};
+    bool saved{};
+    UINT dpi{96U};
+    int scroll_x{};
+    int scroll_y{};
+    bool relayout_active{};
+    std::vector<ControlRecord> paged_controls;
+    std::vector<HWND> push_buttons;
+
+    HWND tabs{};
+    HWND theme{};
+    HWND color{};
+    HWND refresh{};
+    HWND start_windows{};
+    HWND start_minimized{};
+    HWND minimize_tray{};
+    HWND hide_taskbar{};
+    HWND updates{};
+    HWND check_updates{};
+    HWND show_osd{};
+    HWND position{};
+    HWND layout{};
+    HWND opacity{};
+    HWND scale{};
+    HWND spacing{};
+    HWND separators{};
+    HWND background{};
+    HWND easy_enabled{};
+    HWND easy_cpu{};
+    HWND easy_gpu{};
+    HWND easy_memory{};
+    HWND fps_enabled{};
+    HWND fps_game_only{};
+    HWND fps_refresh{};
+    HWND fps_smoothing{};
+    HWND fps_color{};
+    HWND fps_scale{};
+    HWND sensor_list{};
+};
+
+int Scale(const DialogState& state, const int value) noexcept {
+    return MulDiv(value, static_cast<int>(state.dpi), 96);
+}
+
+void StyleControl(const DialogState& state, const HWND control) noexcept {
+    SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(state.font), TRUE);
+    static_cast<void>(SetWindowTheme(control, state.draft.theme == Theme::dark ? L"DarkMode_Explorer" : L"Explorer", nullptr));
+}
+
+LRESULT CALLBACK CheckboxWindowProcedure(
+    const HWND control,
+    const UINT message,
+    const WPARAM wparam,
+    const LPARAM lparam,
+    const UINT_PTR subclass_id,
+    const DWORD_PTR reference_data) noexcept {
+    auto* const state = reinterpret_cast<DialogState*>(reference_data);
+    if (state == nullptr) return DefSubclassProc(control, message, wparam, lparam);
+    if (message == WM_ERASEBKGND) return 1;
+    if (message == WM_PAINT || message == WM_PRINTCLIENT) {
+        PAINTSTRUCT paint{};
+        const auto dc = message == WM_PAINT ? BeginPaint(control, &paint) : reinterpret_cast<HDC>(wparam);
+        if (dc != nullptr) {
+            RECT bounds{};
+            GetClientRect(control, &bounds);
+            FillRect(dc, &bounds, state->background_brush);
+
+            const auto box_size = Scale(*state, 16);
+            RECT box{0, (bounds.bottom - box_size) / 2, box_size, (bounds.bottom + box_size) / 2};
+            FillRect(dc, &box, state->field_brush);
+            FrameRect(dc, &box, GetFocus() == control ? state->accent_brush : state->line_brush);
+            if (SendMessageW(control, BM_GETCHECK, 0U, 0U) == BST_CHECKED) {
+                const auto pen = CreatePen(PS_SOLID, std::max(1, Scale(*state, 2)), WinColor(state->palette.accent));
+                const auto previous_pen = SelectObject(dc, pen);
+                MoveToEx(dc, box.left + Scale(*state, 3), box.top + Scale(*state, 8), nullptr);
+                LineTo(dc, box.left + Scale(*state, 7), box.bottom - Scale(*state, 3));
+                LineTo(dc, box.right - Scale(*state, 2), box.top + Scale(*state, 3));
+                SelectObject(dc, previous_pen);
+                DeleteObject(pen);
+            }
+
+            std::array<wchar_t, 256U> text{};
+            GetWindowTextW(control, text.data(), static_cast<int>(text.size()));
+            auto text_bounds = bounds;
+            text_bounds.left = box.right + Scale(*state, 10);
+            const auto previous_font = SelectObject(dc, state->font);
+            const auto previous_mode = SetBkMode(dc, TRANSPARENT);
+            const auto previous_color = SetTextColor(dc, WinColor(IsWindowEnabled(control) ? state->palette.text : state->palette.disabled));
+            DrawTextW(dc, text.data(), -1, &text_bounds, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_END_ELLIPSIS);
+            SetTextColor(dc, previous_color);
+            SetBkMode(dc, previous_mode);
+            SelectObject(dc, previous_font);
+            if (GetFocus() == control) {
+                auto focus = text_bounds;
+                focus.right = std::min(focus.right, focus.left + Scale(*state, 560));
+                DrawFocusRect(dc, &focus);
+            }
+        }
+        if (message == WM_PAINT) EndPaint(control, &paint);
+        return 0;
+    }
+    if (message == WM_SETFOCUS || message == WM_KILLFOCUS || message == WM_ENABLE || message == BM_SETCHECK) {
+        const auto result = DefSubclassProc(control, message, wparam, lparam);
+        InvalidateRect(control, nullptr, FALSE);
+        return result;
+    }
+    if (message == WM_NCDESTROY) {
+        RemoveWindowSubclass(control, &CheckboxWindowProcedure, subclass_id);
+    }
+    return DefSubclassProc(control, message, wparam, lparam);
+}
+
+LRESULT CALLBACK TabWindowProcedure(
+    const HWND control,
+    const UINT message,
+    const WPARAM wparam,
+    const LPARAM lparam,
+    const UINT_PTR subclass_id,
+    const DWORD_PTR reference_data) noexcept {
+    auto* const state = reinterpret_cast<DialogState*>(reference_data);
+    if (state == nullptr) return DefSubclassProc(control, message, wparam, lparam);
+    if (message == WM_ERASEBKGND) return 1;
+    if (message == WM_PAINT || message == WM_PRINTCLIENT) {
+        PAINTSTRUCT paint{};
+        const auto dc = message == WM_PAINT ? BeginPaint(control, &paint) : reinterpret_cast<HDC>(wparam);
+        if (dc != nullptr) {
+            RECT bounds{};
+            GetClientRect(control, &bounds);
+            FillRect(dc, &bounds, state->background_brush);
+            const auto previous_font = SelectObject(dc, state->font);
+            const auto previous_mode = SetBkMode(dc, TRANSPARENT);
+            const auto selected = TabCtrl_GetCurSel(control);
+            const auto count = TabCtrl_GetItemCount(control);
+            for (int index = 0; index < count; ++index) {
+                RECT item{};
+                if (!TabCtrl_GetItemRect(control, index, &item)) continue;
+                FillRect(dc, &item, index == selected ? state->surface_brush : state->field_brush);
+                FrameRect(dc, &item, state->line_brush);
+                if (index == selected) {
+                    auto accent = item;
+                    accent.top = accent.bottom - Scale(*state, 3);
+                    FillRect(dc, &accent, state->accent_brush);
+                }
+                std::array<wchar_t, 128U> text{};
+                TCITEMW tab{};
+                tab.mask = TCIF_TEXT;
+                tab.pszText = text.data();
+                tab.cchTextMax = static_cast<int>(text.size());
+                static_cast<void>(TabCtrl_GetItem(control, index, &tab));
+                SetTextColor(dc, WinColor(index == selected ? state->palette.accent : state->palette.muted));
+                DrawTextW(dc, text.data(), -1, &item, DT_SINGLELINE | DT_CENTER | DT_VCENTER | DT_END_ELLIPSIS);
+            }
+            SetBkMode(dc, previous_mode);
+            SelectObject(dc, previous_font);
+        }
+        if (message == WM_PAINT) EndPaint(control, &paint);
+        return 0;
+    }
+    if (message == WM_SETFOCUS || message == WM_KILLFOCUS || message == WM_ENABLE) {
+        const auto result = DefSubclassProc(control, message, wparam, lparam);
+        InvalidateRect(control, nullptr, FALSE);
+        return result;
+    }
+    if (message == WM_NCDESTROY) RemoveWindowSubclass(control, &TabWindowProcedure, subclass_id);
+    return DefSubclassProc(control, message, wparam, lparam);
+}
+
+LRESULT CALLBACK ComboWindowProcedure(
+    const HWND control,
+    const UINT message,
+    const WPARAM wparam,
+    const LPARAM lparam,
+    const UINT_PTR subclass_id,
+    const DWORD_PTR reference_data) noexcept {
+    auto* const state = reinterpret_cast<DialogState*>(reference_data);
+    if (state == nullptr) return DefSubclassProc(control, message, wparam, lparam);
+    if (message == WM_ERASEBKGND) return 1;
+    if (message == WM_PAINT || message == WM_PRINTCLIENT) {
+        PAINTSTRUCT paint{};
+        const auto dc = message == WM_PAINT ? BeginPaint(control, &paint) : reinterpret_cast<HDC>(wparam);
+        if (dc != nullptr) {
+            RECT bounds{};
+            GetClientRect(control, &bounds);
+            FillRect(dc, &bounds, state->field_brush);
+            FrameRect(dc, &bounds, GetFocus() == control ? state->accent_brush : state->line_brush);
+
+            const auto arrow_width = Scale(*state, 30);
+            RECT arrow{std::max(bounds.left, bounds.right - arrow_width), bounds.top + 1, bounds.right - 1, bounds.bottom - 1};
+            FillRect(dc, &arrow, SendMessageW(control, CB_GETDROPPEDSTATE, 0U, 0U) != 0 ? state->selection_brush : state->surface_brush);
+            RECT separator{arrow.left, arrow.top, arrow.left + 1, arrow.bottom};
+            FillRect(dc, &separator, state->line_brush);
+
+            const auto center_x = (arrow.left + arrow.right) / 2;
+            const auto center_y = (arrow.top + arrow.bottom) / 2;
+            const auto pen = CreatePen(PS_SOLID, std::max(1, Scale(*state, 2)), WinColor(state->palette.accent));
+            const auto previous_pen = SelectObject(dc, pen);
+            MoveToEx(dc, center_x - Scale(*state, 5), center_y - Scale(*state, 2), nullptr);
+            LineTo(dc, center_x, center_y + Scale(*state, 3));
+            LineTo(dc, center_x + Scale(*state, 5), center_y - Scale(*state, 2));
+            SelectObject(dc, previous_pen);
+            DeleteObject(pen);
+
+            std::array<wchar_t, 256U> text{};
+            GetWindowTextW(control, text.data(), static_cast<int>(text.size()));
+            auto text_bounds = bounds;
+            text_bounds.left += Scale(*state, 10);
+            text_bounds.right = arrow.left - Scale(*state, 6);
+            const auto previous_font = SelectObject(dc, state->font);
+            const auto previous_mode = SetBkMode(dc, TRANSPARENT);
+            const auto previous_color = SetTextColor(dc, WinColor(IsWindowEnabled(control) ? state->palette.text : state->palette.disabled));
+            DrawTextW(dc, text.data(), -1, &text_bounds, DT_SINGLELINE | DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
+            SetTextColor(dc, previous_color);
+            SetBkMode(dc, previous_mode);
+            SelectObject(dc, previous_font);
+        }
+        if (message == WM_PAINT) EndPaint(control, &paint);
+        return 0;
+    }
+    if (message == WM_SETFOCUS || message == WM_KILLFOCUS || message == WM_ENABLE || message == CB_SETCURSEL) {
+        const auto result = DefSubclassProc(control, message, wparam, lparam);
+        InvalidateRect(control, nullptr, FALSE);
+        return result;
+    }
+    if (message == WM_NCDESTROY) RemoveWindowSubclass(control, &ComboWindowProcedure, subclass_id);
+    return DefSubclassProc(control, message, wparam, lparam);
+}
+
+HWND AddControl(DialogState& state, const wchar_t* const type, const wchar_t* const text, const DWORD style, const int x, const int y, const int width, const int height, const int id, const int page) {
+    const auto control = CreateWindowExW(
+        0U,
+        type,
+        text,
+        WS_CHILD | WS_VISIBLE | style,
+        Scale(state, x) - state.scroll_x,
+        Scale(state, y) - state.scroll_y,
+        Scale(state, width),
+        Scale(state, height),
+        state.window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), GetModuleHandleW(nullptr), nullptr);
+    if (control != nullptr) {
+        StyleControl(state, control);
+        state.paged_controls.push_back(DialogState::ControlRecord{control, page, x, y, width, height});
+    }
+    return control;
+}
+
+HWND Label(DialogState& state, const wchar_t* const text, const int y, const int page, const int x = 42, const int width = 215) {
+    return AddControl(state, L"STATIC", text, SS_LEFT | SS_CENTERIMAGE, x, y, width, 28, 0, page);
+}
+
+HWND Check(DialogState& state, const wchar_t* const text, const bool checked, const int y, const int page, const int x = 42, const int width = 590) {
+    const auto control = AddControl(state, L"BUTTON", text, BS_AUTOCHECKBOX | WS_TABSTOP, x, y, width, 28, 0, page);
+    if (control != nullptr) static_cast<void>(SetWindowSubclass(control, &CheckboxWindowProcedure, 1U, reinterpret_cast<DWORD_PTR>(&state)));
+    SendMessageW(control, BM_SETCHECK, checked ? BST_CHECKED : BST_UNCHECKED, 0);
+    return control;
+}
+
+HWND PushButton(DialogState& state, const wchar_t* const text, const int x, const int y, const int width, const int height, const int id, const int page) {
+    const auto control = AddControl(state, L"BUTTON", text, BS_OWNERDRAW | WS_TABSTOP, x, y, width, height, id, page);
+    if (control != nullptr) state.push_buttons.push_back(control);
+    return control;
+}
+
+HWND Combo(DialogState& state, const int y, const int page, const std::vector<std::pair<const wchar_t*, std::uint32_t>>& items, const std::uint32_t selected) {
+    const auto control = AddControl(state, WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_BORDER | WS_TABSTOP | WS_VSCROLL, 270, y, 350, 220, 0, page);
+    if (control != nullptr) static_cast<void>(SetWindowSubclass(control, &ComboWindowProcedure, 1U, reinterpret_cast<DWORD_PTR>(&state)));
+    SendMessageW(control, CB_SETITEMHEIGHT, static_cast<WPARAM>(-1), Scale(state, 28));
+    SendMessageW(control, CB_SETITEMHEIGHT, 0U, Scale(state, 28));
+    int selected_index{};
+    for (std::size_t index = 0U; index < items.size(); ++index) {
+        const auto item = static_cast<int>(SendMessageW(control, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(items[index].first)));
+        SendMessageW(control, CB_SETITEMDATA, item, items[index].second);
+        if (items[index].second == selected) selected_index = item;
+    }
+    SendMessageW(control, CB_SETCURSEL, selected_index, 0);
+    InvalidateRect(control, nullptr, TRUE);
+    return control;
+}
+
+std::uint32_t ComboValue(const HWND combo, const std::uint32_t fallback) noexcept {
+    const auto selected = SendMessageW(combo, CB_GETCURSEL, 0, 0);
+    if (selected == CB_ERR) return fallback;
+    const auto value = SendMessageW(combo, CB_GETITEMDATA, static_cast<WPARAM>(selected), 0);
+    return value == CB_ERR ? fallback : static_cast<std::uint32_t>(value);
+}
+
+bool Checked(const HWND control) noexcept { return SendMessageW(control, BM_GETCHECK, 0, 0) == BST_CHECKED; }
+
+void DeleteDialogResources(DialogState& state) noexcept {
+    if (state.font != nullptr) DeleteObject(std::exchange(state.font, nullptr));
+    if (state.background_brush != nullptr) DeleteObject(std::exchange(state.background_brush, nullptr));
+    if (state.field_brush != nullptr) DeleteObject(std::exchange(state.field_brush, nullptr));
+    if (state.surface_brush != nullptr) DeleteObject(std::exchange(state.surface_brush, nullptr));
+    if (state.hover_brush != nullptr) DeleteObject(std::exchange(state.hover_brush, nullptr));
+    if (state.selection_brush != nullptr) DeleteObject(std::exchange(state.selection_brush, nullptr));
+    if (state.line_brush != nullptr) DeleteObject(std::exchange(state.line_brush, nullptr));
+    if (state.accent_brush != nullptr) DeleteObject(std::exchange(state.accent_brush, nullptr));
+}
+
+void RecreateBrushes(DialogState& state) noexcept {
+    if (state.background_brush != nullptr) DeleteObject(std::exchange(state.background_brush, nullptr));
+    if (state.field_brush != nullptr) DeleteObject(std::exchange(state.field_brush, nullptr));
+    if (state.surface_brush != nullptr) DeleteObject(std::exchange(state.surface_brush, nullptr));
+    if (state.hover_brush != nullptr) DeleteObject(std::exchange(state.hover_brush, nullptr));
+    if (state.selection_brush != nullptr) DeleteObject(std::exchange(state.selection_brush, nullptr));
+    if (state.line_brush != nullptr) DeleteObject(std::exchange(state.line_brush, nullptr));
+    if (state.accent_brush != nullptr) DeleteObject(std::exchange(state.accent_brush, nullptr));
+    state.background_brush = CreateSolidBrush(WinColor(state.palette.background));
+    state.field_brush = CreateSolidBrush(WinColor(state.palette.surface_alternate));
+    state.surface_brush = CreateSolidBrush(WinColor(state.palette.surface));
+    state.hover_brush = CreateSolidBrush(WinColor(state.palette.hover));
+    state.selection_brush = CreateSolidBrush(WinColor(state.palette.selection));
+    state.line_brush = CreateSolidBrush(WinColor(state.palette.line));
+    state.accent_brush = CreateSolidBrush(WinColor(state.palette.accent));
+}
+
+void ShowPage(DialogState& state, const int page) noexcept {
+    for (const auto& record : state.paged_controls) ShowWindow(record.window, record.page < 0 || record.page == page ? SW_SHOW : SW_HIDE);
+}
+
+void RecreateFont(DialogState& state) noexcept {
+    const auto next = CreateFontW(
+        -Scale(state, 17),
+        0,
+        0,
+        0,
+        FW_NORMAL,
+        FALSE,
+        FALSE,
+        FALSE,
+        DEFAULT_CHARSET,
+        OUT_DEFAULT_PRECIS,
+        CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY,
+        DEFAULT_PITCH,
+        L"Segoe UI");
+    if (next == nullptr) return;
+    for (const auto& record : state.paged_controls) SendMessageW(record.window, WM_SETFONT, reinterpret_cast<WPARAM>(next), TRUE);
+    if (state.font != nullptr) DeleteObject(state.font);
+    state.font = next;
+}
+
+void UpdateOwnerDrawMetrics(DialogState& state) noexcept {
+    if (state.tabs != nullptr) TabCtrl_SetItemSize(state.tabs, Scale(state, 200), Scale(state, 36));
+    for (const auto& record : state.paged_controls) {
+        std::array<wchar_t, 32U> class_name{};
+        if (GetClassNameW(record.window, class_name.data(), static_cast<int>(class_name.size())) == 0) continue;
+        if (_wcsicmp(class_name.data(), WC_COMBOBOXW) == 0) {
+            SendMessageW(record.window, CB_SETITEMHEIGHT, static_cast<WPARAM>(-1), Scale(state, 28));
+            SendMessageW(record.window, CB_SETITEMHEIGHT, 0U, Scale(state, 28));
+        } else if (_wcsicmp(class_name.data(), L"ListBox") == 0) {
+            SendMessageW(record.window, LB_SETITEMHEIGHT, 0U, Scale(state, 28));
+        }
+    }
+}
+
+void LayoutControls(DialogState& state) noexcept {
+    auto defer = BeginDeferWindowPos(static_cast<int>(state.paged_controls.size()));
+    for (const auto& record : state.paged_controls) {
+        if (defer == nullptr) break;
+        defer = DeferWindowPos(
+            defer,
+            record.window,
+            nullptr,
+            Scale(state, record.x) - state.scroll_x,
+            Scale(state, record.y) - state.scroll_y,
+            Scale(state, record.width),
+            Scale(state, record.height),
+            SWP_NOACTIVATE | SWP_NOZORDER);
+    }
+    if (defer != nullptr) static_cast<void>(EndDeferWindowPos(defer));
+}
+
+void UpdateScrollBars(DialogState& state) noexcept {
+    RECT client{};
+    GetClientRect(state.window, &client);
+    const auto client_width = std::max(1L, client.right - client.left);
+    const auto client_height = std::max(1L, client.bottom - client.top);
+    const auto content_width = std::max(1, Scale(state, kLogicalContentWidth));
+    const auto content_height = std::max(1, Scale(state, kLogicalContentHeight));
+    state.scroll_x = std::clamp(state.scroll_x, 0, std::max(0, content_width - static_cast<int>(client_width)));
+    state.scroll_y = std::clamp(state.scroll_y, 0, std::max(0, content_height - static_cast<int>(client_height)));
+
+    SCROLLINFO horizontal{sizeof(horizontal), SIF_PAGE | SIF_POS | SIF_RANGE, 0, content_width - 1, static_cast<UINT>(client_width), state.scroll_x, 0};
+    SCROLLINFO vertical{sizeof(vertical), SIF_PAGE | SIF_POS | SIF_RANGE, 0, content_height - 1, static_cast<UINT>(client_height), state.scroll_y, 0};
+    static_cast<void>(SetScrollInfo(state.window, SB_HORZ, &horizontal, TRUE));
+    static_cast<void>(SetScrollInfo(state.window, SB_VERT, &vertical, TRUE));
+}
+
+void Relayout(DialogState& state) noexcept {
+    if (std::exchange(state.relayout_active, true)) return;
+    UpdateScrollBars(state);
+    LayoutControls(state);
+    state.relayout_active = false;
+}
+
+void HandleScroll(DialogState& state, const int bar, const WPARAM wparam) noexcept {
+    SCROLLINFO information{sizeof(information), SIF_ALL};
+    if (!GetScrollInfo(state.window, bar, &information)) return;
+    auto position = information.nPos;
+    switch (LOWORD(wparam)) {
+    case SB_LINEUP: position -= Scale(state, 24); break;
+    case SB_LINEDOWN: position += Scale(state, 24); break;
+    case SB_PAGEUP: position -= static_cast<int>(information.nPage); break;
+    case SB_PAGEDOWN: position += static_cast<int>(information.nPage); break;
+    case SB_THUMBPOSITION:
+    case SB_THUMBTRACK: position = information.nTrackPos; break;
+    default: return;
+    }
+    const auto maximum = std::max(0, information.nMax - static_cast<int>(information.nPage) + 1);
+    position = std::clamp(position, 0, maximum);
+    if (bar == SB_HORZ) state.scroll_x = position;
+    else state.scroll_y = position;
+    information.fMask = SIF_POS;
+    information.nPos = position;
+    static_cast<void>(SetScrollInfo(state.window, bar, &information, TRUE));
+    LayoutControls(state);
+    InvalidateRect(state.window, nullptr, TRUE);
+}
+
+void BuildControls(DialogState& state) {
+    state.tabs = AddControl(state, WC_TABCONTROLW, L"", TCS_OWNERDRAWFIXED | TCS_FIXEDWIDTH | WS_TABSTOP, 20, 18, 610, 38, kTabs, -1);
+    if (state.tabs != nullptr) static_cast<void>(SetWindowSubclass(state.tabs, &TabWindowProcedure, 1U, reinterpret_cast<DWORD_PTR>(&state)));
+    TabCtrl_SetItemSize(state.tabs, Scale(state, 200), Scale(state, 36));
+    constexpr std::array<const wchar_t*, 3U> pages{L"General", L"On-screen display", L"Monitoring"};
+    for (std::size_t index = 0U; index < pages.size(); ++index) {
+        TCITEMW item{};
+        item.mask = TCIF_TEXT;
+        item.pszText = const_cast<LPWSTR>(pages[index]);
+        static_cast<void>(TabCtrl_InsertItem(state.tabs, static_cast<int>(index), &item));
+    }
+
+    Label(state, L"Application theme", 82, 0);
+    state.theme = Combo(state, 82, 0, {{L"Dark", 0U}, {L"Light", 1U}}, static_cast<std::uint32_t>(state.draft.theme));
+    Label(state, L"Text and accent color", 122, 0);
+    state.color = Combo(state, 122, 0, {{L"Teal", 0x52E0D4U}, {L"White", 0xFFFFFFU}, {L"Red", 0xFF5252U}, {L"Orange", 0xFF9F43U}, {L"Yellow", 0xFFD93DU}}, state.draft.text_color_rgb);
+    Label(state, L"Hardware refresh", 162, 0);
+    state.refresh = Combo(state, 162, 0, {{L"100 ms", 100U}, {L"250 ms", 250U}, {L"500 ms", 500U}, {L"750 ms", 750U}, {L"1 second", 1'000U}, {L"2 seconds", 2'000U}, {L"5 seconds", 5'000U}}, state.draft.refresh_interval_ms);
+    state.start_windows = Check(state, L"Start HardwareScope with Windows", state.draft.start_with_windows, 218, 0);
+    state.start_minimized = Check(state, L"Start minimized to the notification tray", state.draft.start_minimized, 254, 0);
+    state.minimize_tray = Check(state, L"Minimize button hides HardwareScope in the tray", state.draft.minimize_to_tray, 290, 0);
+    state.hide_taskbar = Check(state, L"Remove the taskbar button while minimized", state.draft.hide_taskbar_when_minimized, 326, 0);
+    state.updates = Check(state, L"Automatically download and install stable updates", state.draft.automatic_updates, 378, 0);
+    state.check_updates = PushButton(state, L"Check for updates", 42, 430, 180, 36, kSettingsCheckUpdatesCommand, 0);
+
+    state.show_osd = Check(state, L"Show the on-screen display", state.draft.show_osd, 82, 1);
+    Label(state, L"Screen corner", 126, 1);
+    state.position = Combo(state, 126, 1, {{L"Top left", 0U}, {L"Top right", 1U}, {L"Bottom left", 2U}, {L"Bottom right", 3U}}, static_cast<std::uint32_t>(state.draft.osd_position));
+    Label(state, L"Layout", 166, 1);
+    state.layout = Combo(state, 166, 1, {{L"Vertical", 0U}, {L"Horizontal", 1U}}, static_cast<std::uint32_t>(state.draft.osd_layout));
+    Label(state, L"Opacity", 206, 1);
+    state.opacity = Combo(state, 206, 1, {{L"25%", 25U}, {L"50%", 50U}, {L"75%", 75U}, {L"90%", 90U}, {L"100%", 100U}}, state.draft.osd_opacity_percent);
+    Label(state, L"Telemetry scale", 246, 1);
+    state.scale = Combo(state, 246, 1, {{L"50%", 50U}, {L"75%", 75U}, {L"100%", 100U}, {L"125%", 125U}, {L"150%", 150U}, {L"200%", 200U}, {L"250%", 250U}}, state.draft.osd_scale_percent);
+    Label(state, L"Item spacing", 286, 1);
+    state.spacing = Combo(state, 286, 1, {{L"Tight — 2 px", 2U}, {L"Compact — 5 px", 5U}, {L"Normal — 8 px", 8U}, {L"Roomy — 12 px", 12U}, {L"Wide — 20 px", 20U}}, state.draft.osd_spacing_px);
+    state.separators = Check(state, L"Separate CPU, GPU, memory, and FPS groups with |", state.draft.osd_group_separators, 342, 1);
+    state.background = Check(state, L"Draw a translucent background behind the OSD", state.draft.osd_background, 378, 1);
+
+    state.easy_enabled = Check(state, L"Enable EZ Temp selection", state.draft.easy_temperature_enabled, 78, 2);
+    state.easy_cpu = Check(state, L"CPU Tctl/Tdie", (state.draft.easy_temperature_mask & easy_cpu_package) != 0U, 110, 2, 64, 170);
+    state.easy_gpu = Check(state, L"GPU core", (state.draft.easy_temperature_mask & easy_gpu_core) != 0U, 140, 2, 64, 170);
+    state.easy_memory = Check(state, L"GPU memory junction", (state.draft.easy_temperature_mask & easy_gpu_memory_junction) != 0U, 170, 2, 64, 210);
+    state.fps_enabled = Check(state, L"Enable game FPS monitoring", state.draft.fps_enabled, 206, 2);
+    state.fps_game_only = Check(state, L"Show FPS only while a game is running", state.draft.fps_game_only, 238, 2);
+    Label(state, L"FPS refresh", 272, 2);
+    state.fps_refresh = Combo(state, 272, 2, {{L"50 ms", 50U}, {L"100 ms", 100U}, {L"200 ms", 200U}, {L"250 ms", 250U}, {L"500 ms", 500U}}, state.draft.fps_refresh_interval_ms);
+    Label(state, L"FPS smoothing", 312, 2);
+    state.fps_smoothing = Combo(state, 312, 2, {{L"250 ms", 250U}, {L"500 ms", 500U}, {L"750 ms", 750U}, {L"1 second", 1'000U}, {L"1.25 seconds", 1'250U}}, state.draft.fps_smoothing_interval_ms);
+    Label(state, L"FPS color", 352, 2);
+    state.fps_color = Combo(state, 352, 2, {{L"Match telemetry", state.draft.text_color_rgb}, {L"Teal", 0x52E0D4U}, {L"White", 0xFFFFFFU}, {L"Red", 0xFF5252U}, {L"Orange", 0xFF9F43U}, {L"Yellow", 0xFFD93DU}}, state.draft.fps_color_rgb);
+    Label(state, L"FPS scale", 392, 2);
+    state.fps_scale = Combo(state, 392, 2, {{L"50%", 50U}, {L"75%", 75U}, {L"100%", 100U}, {L"125%", 125U}, {L"150%", 150U}, {L"200%", 200U}, {L"250%", 250U}, {L"300%", 300U}}, state.draft.fps_scale_percent);
+    Label(state, L"Additional OSD sensors", 434, 2, 42, 220);
+    state.sensor_list = AddControl(state, L"LISTBOX", L"", LBS_EXTENDEDSEL | LBS_NOINTEGRALHEIGHT | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS | WS_BORDER | WS_VSCROLL | WS_TABSTOP, 270, 430, 350, 128, 0, 2);
+    SendMessageW(state.sensor_list, LB_SETITEMHEIGHT, 0U, Scale(state, 28));
+    for (std::uint32_t index = 0U; state.snapshot != nullptr && index < state.snapshot->count; ++index) {
+        const auto& sensor = state.snapshot->sensors[index];
+        std::wstring label = sensor.name.data();
+        label += L"  —  ";
+        label += sensor.hardware.data();
+        const auto item = SendMessageW(state.sensor_list, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str()));
+        SendMessageW(state.sensor_list, LB_SETITEMDATA, static_cast<WPARAM>(item), static_cast<LPARAM>(index));
+        if (state.draft.IsSensorPinned(sensor.id)) SendMessageW(state.sensor_list, LB_SETSEL, TRUE, item);
+    }
+
+    PushButton(state, L"Cancel", 408, 605, 100, 38, kCancel, -1);
+    PushButton(state, L"Save settings", 518, 605, 120, 38, kSave, -1);
+    ShowPage(state, 0);
+}
+
+void ReadControls(DialogState& state) noexcept {
+    state.draft.theme = static_cast<Theme>(ComboValue(state.theme, 0U));
+    state.draft.text_color_rgb = ComboValue(state.color, state.draft.text_color_rgb);
+    state.draft.refresh_interval_ms = ComboValue(state.refresh, state.draft.refresh_interval_ms);
+    state.draft.start_with_windows = Checked(state.start_windows);
+    state.draft.start_minimized = Checked(state.start_minimized);
+    state.draft.minimize_to_tray = Checked(state.minimize_tray);
+    state.draft.hide_taskbar_when_minimized = Checked(state.hide_taskbar);
+    state.draft.automatic_updates = Checked(state.updates);
+    state.draft.show_osd = Checked(state.show_osd);
+    state.draft.osd_position = static_cast<OsdPosition>(ComboValue(state.position, 0U));
+    state.draft.osd_layout = static_cast<OsdLayout>(ComboValue(state.layout, 0U));
+    state.draft.osd_opacity_percent = ComboValue(state.opacity, state.draft.osd_opacity_percent);
+    state.draft.osd_scale_percent = ComboValue(state.scale, state.draft.osd_scale_percent);
+    state.draft.osd_spacing_px = ComboValue(state.spacing, state.draft.osd_spacing_px);
+    state.draft.osd_group_separators = Checked(state.separators);
+    state.draft.osd_background = Checked(state.background);
+    state.draft.easy_temperature_enabled = Checked(state.easy_enabled);
+    state.draft.easy_temperature_mask = (Checked(state.easy_cpu) ? easy_cpu_package : 0U)
+        | (Checked(state.easy_gpu) ? easy_gpu_core : 0U)
+        | (Checked(state.easy_memory) ? easy_gpu_memory_junction : 0U);
+    state.draft.fps_enabled = Checked(state.fps_enabled);
+    state.draft.fps_game_only = Checked(state.fps_game_only);
+    state.draft.fps_refresh_interval_ms = ComboValue(state.fps_refresh, state.draft.fps_refresh_interval_ms);
+    state.draft.fps_smoothing_interval_ms = ComboValue(state.fps_smoothing, state.draft.fps_smoothing_interval_ms);
+    state.draft.fps_color_rgb = ComboValue(state.fps_color, state.draft.fps_color_rgb);
+    state.draft.fps_scale_percent = ComboValue(state.fps_scale, state.draft.fps_scale_percent);
+    state.draft.pinned_sensor_ids = {};
+    state.draft.pinned_sensor_count = 0U;
+    const auto count = static_cast<int>(SendMessageW(state.sensor_list, LB_GETCOUNT, 0, 0));
+    for (int item = 0; item < count && state.draft.pinned_sensor_count < state.draft.pinned_sensor_ids.size(); ++item) {
+        if (SendMessageW(state.sensor_list, LB_GETSEL, item, 0) <= 0) continue;
+        const auto sensor_index = static_cast<std::uint32_t>(SendMessageW(state.sensor_list, LB_GETITEMDATA, item, 0));
+        if (state.snapshot != nullptr && sensor_index < state.snapshot->count) state.draft.pinned_sensor_ids[state.draft.pinned_sensor_count++] = state.snapshot->sensors[sensor_index].id;
+    }
+    state.draft.Normalize();
+}
+
+bool IsPushButton(const DialogState& state, const HWND control) noexcept {
+    return std::find(state.push_buttons.begin(), state.push_buttons.end(), control) != state.push_buttons.end();
+}
+
+void DrawControlText(
+    const DialogState& state,
+    const HDC dc,
+    std::wstring& text,
+    RECT bounds,
+    const COLORREF color,
+    const UINT alignment) noexcept {
+    const auto previous_font = SelectObject(dc, state.font);
+    const auto previous_mode = SetBkMode(dc, TRANSPARENT);
+    const auto previous_color = SetTextColor(dc, color);
+    bounds.left += Scale(state, 9);
+    bounds.right -= Scale(state, 9);
+    DrawTextW(dc, text.data(), static_cast<int>(text.size()), &bounds, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | alignment);
+    SetTextColor(dc, previous_color);
+    SetBkMode(dc, previous_mode);
+    SelectObject(dc, previous_font);
+}
+
+void DrawOwnerItem(DialogState& state, const DRAWITEMSTRUCT& item) noexcept {
+    if (item.hDC == nullptr) return;
+    const auto selected = (item.itemState & ODS_SELECTED) != 0U;
+    const auto focused = (item.itemState & ODS_FOCUS) != 0U;
+    const auto disabled = (item.itemState & ODS_DISABLED) != 0U;
+    auto bounds = item.rcItem;
+    std::wstring text;
+
+    if (item.CtlType == ODT_TAB) {
+        std::array<wchar_t, 128U> buffer{};
+        TCITEMW tab{};
+        tab.mask = TCIF_TEXT;
+        tab.pszText = buffer.data();
+        tab.cchTextMax = static_cast<int>(buffer.size());
+        if (TabCtrl_GetItem(item.hwndItem, static_cast<int>(item.itemID), &tab)) text = buffer.data();
+        FillRect(item.hDC, &bounds, selected ? state.surface_brush : state.background_brush);
+        if (selected) {
+            auto accent_line = bounds;
+            accent_line.top = accent_line.bottom - Scale(state, 3);
+            FillRect(item.hDC, &accent_line, state.accent_brush);
+        }
+        DrawControlText(state, item.hDC, text, bounds, WinColor(selected ? state.palette.accent : state.palette.muted), DT_CENTER);
+        return;
+    }
+
+    if (item.CtlType == ODT_COMBOBOX || item.CtlType == ODT_LISTBOX) {
+        if (item.itemID != static_cast<UINT>(-1)) {
+            const auto length_message = item.CtlType == ODT_COMBOBOX ? CB_GETLBTEXTLEN : LB_GETTEXTLEN;
+            const auto text_message = item.CtlType == ODT_COMBOBOX ? CB_GETLBTEXT : LB_GETTEXT;
+            const auto length = SendMessageW(item.hwndItem, length_message, item.itemID, 0);
+            if (length >= 0) {
+                text.resize(static_cast<std::size_t>(length) + 1U);
+                SendMessageW(item.hwndItem, text_message, item.itemID, reinterpret_cast<LPARAM>(text.data()));
+                text.resize(static_cast<std::size_t>(length));
+            }
+        } else {
+            std::array<wchar_t, 256U> buffer{};
+            GetWindowTextW(item.hwndItem, buffer.data(), static_cast<int>(buffer.size()));
+            text = buffer.data();
+        }
+        FillRect(item.hDC, &bounds, selected ? state.selection_brush : state.field_brush);
+        DrawControlText(
+            state,
+            item.hDC,
+            text,
+            bounds,
+            WinColor(disabled ? state.palette.disabled : selected ? state.palette.selection_text : state.palette.text),
+            DT_LEFT);
+        if (focused) FrameRect(item.hDC, &bounds, state.accent_brush);
+        return;
+    }
+
+    if (item.CtlType == ODT_BUTTON && IsPushButton(state, item.hwndItem)) {
+        std::array<wchar_t, 256U> buffer{};
+        GetWindowTextW(item.hwndItem, buffer.data(), static_cast<int>(buffer.size()));
+        text = buffer.data();
+        FillRect(item.hDC, &bounds, state.background_brush);
+        auto face = bounds;
+        InflateRect(&face, -1, -1);
+        const auto is_primary = GetDlgCtrlID(item.hwndItem) == kSave;
+        FillRect(item.hDC, &face, selected ? state.selection_brush : is_primary ? state.accent_brush : focused ? state.hover_brush : state.surface_brush);
+        FrameRect(item.hDC, &face, focused ? state.accent_brush : state.line_brush);
+        DrawControlText(
+            state,
+            item.hDC,
+            text,
+            bounds,
+            WinColor(disabled ? state.palette.disabled : is_primary ? state.palette.selection_text : state.palette.text),
+            DT_CENTER);
+        return;
+    }
+}
+
+void PreviewPalette(DialogState& state) noexcept {
+    state.draft.theme = static_cast<Theme>(ComboValue(state.theme, static_cast<std::uint32_t>(state.draft.theme)));
+    state.draft.text_color_rgb = ComboValue(state.color, state.draft.text_color_rgb);
+    state.palette = PaletteFor(state.draft.theme, state.draft.text_color_rgb);
+    RecreateBrushes(state);
+    for (const auto& record : state.paged_controls) StyleControl(state, record.window);
+    const BOOL dark = state.draft.theme == Theme::dark ? TRUE : FALSE;
+    static_cast<void>(DwmSetWindowAttribute(state.window, 20U, &dark, sizeof(dark)));
+    static_cast<void>(SetWindowTheme(state.window, state.draft.theme == Theme::dark ? L"DarkMode_Explorer" : L"Explorer", nullptr));
+    RedrawWindow(state.window, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_FRAME);
+}
+
+LRESULT CALLBACK WindowProcedure(const HWND window, const UINT message, const WPARAM wparam, const LPARAM lparam) noexcept {
+    auto* state = reinterpret_cast<DialogState*>(GetWindowLongPtrW(window, GWLP_USERDATA));
+    if (message == WM_NCCREATE) {
+        state = static_cast<DialogState*>(reinterpret_cast<CREATESTRUCTW*>(lparam)->lpCreateParams);
+        SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(state));
+        state->window = window;
+    }
+    if (state == nullptr) return DefWindowProcW(window, message, wparam, lparam);
+    switch (message) {
+#if HARDWARESCOPE_INTERNAL_TEST_HOOKS
+    case kApplySettingsDpiTestMessage: {
+        const auto previous_dpi = std::max(96U, state->dpi);
+        const auto target_dpi = std::clamp(static_cast<UINT>(wparam), 96U, 384U);
+        RECT target{};
+        GetWindowRect(window, &target);
+        const auto width = MulDiv(target.right - target.left, static_cast<int>(target_dpi), static_cast<int>(previous_dpi));
+        const auto height = MulDiv(target.bottom - target.top, static_cast<int>(target_dpi), static_cast<int>(previous_dpi));
+        target.right = target.left + width;
+        target.bottom = target.top + height;
+        static_cast<void>(SendMessageW(
+            window,
+            WM_DPICHANGED,
+            MAKEWPARAM(target_dpi, target_dpi),
+            reinterpret_cast<LPARAM>(&target)));
+        return static_cast<LRESULT>(state->dpi);
+    }
+#endif
+    case WM_DPICHANGED: {
+        state->dpi = HIWORD(wparam) == 0U ? 96U : HIWORD(wparam);
+        RecreateFont(*state);
+        UpdateOwnerDrawMetrics(*state);
+        const auto* suggested = reinterpret_cast<const RECT*>(lparam);
+        MONITORINFO monitor_information{};
+        monitor_information.cbSize = sizeof(monitor_information);
+        const auto monitor = MonitorFromRect(suggested, MONITOR_DEFAULTTONEAREST);
+        RECT target = *suggested;
+        if (GetMonitorInfoW(monitor, &monitor_information)) {
+            const auto maximum_width = monitor_information.rcWork.right - monitor_information.rcWork.left;
+            const auto maximum_height = monitor_information.rcWork.bottom - monitor_information.rcWork.top;
+            const auto width = std::min(target.right - target.left, maximum_width);
+            const auto height = std::min(target.bottom - target.top, maximum_height);
+            target.left = std::clamp(target.left, monitor_information.rcWork.left, monitor_information.rcWork.right - width);
+            target.top = std::clamp(target.top, monitor_information.rcWork.top, monitor_information.rcWork.bottom - height);
+            target.right = target.left + width;
+            target.bottom = target.top + height;
+        }
+        static_cast<void>(SetWindowPos(
+            window,
+            nullptr,
+            target.left,
+            target.top,
+            target.right - target.left,
+            target.bottom - target.top,
+            SWP_NOACTIVATE | SWP_NOZORDER));
+        Relayout(*state);
+        InvalidateRect(window, nullptr, TRUE);
+        return 0;
+    }
+    case WM_SIZE:
+        Relayout(*state);
+        return 0;
+    case WM_HSCROLL:
+        HandleScroll(*state, SB_HORZ, wparam);
+        return 0;
+    case WM_VSCROLL:
+        HandleScroll(*state, SB_VERT, wparam);
+        return 0;
+    case WM_MOUSEWHEEL: {
+        const auto lines = std::max(1, std::abs(GET_WHEEL_DELTA_WPARAM(wparam)) / WHEEL_DELTA) * 3;
+        for (int line = 0; line < lines; ++line) {
+            HandleScroll(*state, SB_VERT, MAKEWPARAM(GET_WHEEL_DELTA_WPARAM(wparam) > 0 ? SB_LINEUP : SB_LINEDOWN, 0));
+        }
+        return 0;
+    }
+    case WM_COMMAND:
+        if (HIWORD(wparam) == CBN_SELCHANGE
+            && (reinterpret_cast<HWND>(lparam) == state->theme || reinterpret_cast<HWND>(lparam) == state->color)) {
+            PreviewPalette(*state);
+            return 0;
+        }
+        if (LOWORD(wparam) == kSettingsCheckUpdatesCommand) {
+            if (PostMessageW(state->owner, kManualUpdateRequestMessage, 0U, 0)) {
+                EnableWindow(state->check_updates, FALSE);
+                SetWindowTextW(state->check_updates, L"Checking...");
+            }
+            return 0;
+        }
+        if (LOWORD(wparam) == kSave) {
+            ReadControls(*state);
+            state->saved = true;
+            state->done = true;
+            DestroyWindow(window);
+            return 0;
+        }
+        if (LOWORD(wparam) == kCancel) {
+            state->done = true;
+            DestroyWindow(window);
+            return 0;
+        }
+        break;
+    case WM_DRAWITEM:
+        DrawOwnerItem(*state, *reinterpret_cast<const DRAWITEMSTRUCT*>(lparam));
+        return TRUE;
+    case WM_NOTIFY:
+        if (reinterpret_cast<NMHDR*>(lparam)->idFrom == kTabs && reinterpret_cast<NMHDR*>(lparam)->code == TCN_SELCHANGE) {
+            ShowPage(*state, TabCtrl_GetCurSel(state->tabs));
+            return 0;
+        }
+        break;
+    case WM_CLOSE:
+        state->done = true;
+        DestroyWindow(window);
+        return 0;
+    case WM_ERASEBKGND: {
+        RECT bounds{};
+        GetClientRect(window, &bounds);
+        FillRect(reinterpret_cast<HDC>(wparam), &bounds, state->background_brush);
+        return 1;
+    }
+    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLORBTN: {
+        const auto dc = reinterpret_cast<HDC>(wparam);
+        SetTextColor(dc, WinColor(state->palette.text));
+        SetBkColor(dc, WinColor(state->palette.background));
+        return reinterpret_cast<LRESULT>(state->background_brush);
+    }
+    case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORLISTBOX: {
+        const auto dc = reinterpret_cast<HDC>(wparam);
+        SetTextColor(dc, WinColor(state->palette.text));
+        SetBkColor(dc, WinColor(state->palette.surface_alternate));
+        return reinterpret_cast<LRESULT>(state->field_brush);
+    }
+    case WM_DESTROY:
+        state->done = true;
+        return 0;
+    default:
+        break;
+    }
+    return DefWindowProcW(window, message, wparam, lparam);
+}
+
+} // namespace
+
+bool ShowSettingsWindow(const HWND owner, AppSettings& settings, const SensorSnapshot& snapshot) noexcept {
+    INITCOMMONCONTROLSEX common_controls{};
+    common_controls.dwSize = sizeof(common_controls);
+    common_controls.dwICC = ICC_STANDARD_CLASSES | ICC_TAB_CLASSES;
+    static_cast<void>(InitCommonControlsEx(&common_controls));
+
+    const auto instance = GetModuleHandleW(nullptr);
+    WNDCLASSEXW window_class{};
+    window_class.cbSize = sizeof(window_class);
+    window_class.lpfnWndProc = &WindowProcedure;
+    window_class.hInstance = instance;
+    window_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    window_class.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(101));
+    window_class.hIconSm = static_cast<HICON>(LoadImageW(instance, MAKEINTRESOURCEW(101), IMAGE_ICON, 16, 16, LR_SHARED));
+    window_class.lpszClassName = kClassName;
+    if (RegisterClassExW(&window_class) == 0 && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return false;
+
+    DialogState state{};
+    state.owner = owner;
+    state.draft = settings;
+    state.snapshot = &snapshot;
+    state.dpi = GetDpiForWindow(owner);
+    if (state.dpi == 0U) state.dpi = 96U;
+    state.palette = PaletteFor(state.draft.theme, state.draft.text_color_rgb);
+    RecreateFont(state);
+    RecreateBrushes(state);
+    MONITORINFO monitor_information{};
+    monitor_information.cbSize = sizeof(monitor_information);
+    const auto monitor = MonitorFromWindow(owner, MONITOR_DEFAULTTONEAREST);
+    if (!GetMonitorInfoW(monitor, &monitor_information)) static_cast<void>(SystemParametersInfoW(SPI_GETWORKAREA, 0U, &monitor_information.rcWork, 0U));
+    const auto desired_width = Scale(state, kLogicalDialogWidth);
+    const auto desired_height = Scale(state, kLogicalDialogHeight);
+    const auto available_width = std::max(480, static_cast<int>(monitor_information.rcWork.right - monitor_information.rcWork.left));
+    const auto available_height = std::max(400, static_cast<int>(monitor_information.rcWork.bottom - monitor_information.rcWork.top));
+    const auto width = std::min(desired_width, available_width);
+    const auto height = std::min(desired_height, available_height);
+    const auto x = monitor_information.rcWork.left + (available_width - width) / 2;
+    const auto y = monitor_information.rcWork.top + (available_height - height) / 2;
+    state.window = CreateWindowExW(
+        WS_EX_DLGMODALFRAME,
+        kClassName,
+        L"HardwareScope settings",
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_HSCROLL | WS_VSCROLL,
+        x,
+        y,
+        width,
+        height,
+        owner,
+        nullptr,
+        instance,
+        &state);
+    if (state.window == nullptr) {
+        DeleteDialogResources(state);
+        return false;
+    }
+    static_cast<void>(SendMessageW(state.window, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(window_class.hIcon)));
+    static_cast<void>(SendMessageW(state.window, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(window_class.hIconSm)));
+    const BOOL dark = state.draft.theme == Theme::dark ? TRUE : FALSE;
+    static_cast<void>(DwmSetWindowAttribute(state.window, 20U, &dark, sizeof(dark)));
+    static_cast<void>(SetWindowTheme(state.window, state.draft.theme == Theme::dark ? L"DarkMode_Explorer" : L"Explorer", nullptr));
+    BuildControls(state);
+    Relayout(state);
+    EnableWindow(owner, FALSE);
+    ShowWindow(state.window, SW_SHOW);
+    UpdateWindow(state.window);
+    MSG message{};
+    while (!state.done && GetMessageW(&message, nullptr, 0U, 0U) > 0) {
+        if (!IsDialogMessageW(state.window, &message)) {
+            TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
+    }
+    EnableWindow(owner, TRUE);
+    SetForegroundWindow(owner);
+    DeleteDialogResources(state);
+    if (state.saved) settings = state.draft;
+    return state.saved;
+}
+
+} // namespace hardwarescope

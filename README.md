@@ -2,64 +2,87 @@
   <img src="assets/hardwarescope-logo.png" alt="HardwareScope logo" width="160">
 </p>
 
-# HardwareScope downloads
+# HardwareScope
 
-This public repository hosts the HardwareScope download website, release notes, installers, and update metadata.
+[![Windows CI](https://github.com/Aydren1/HardwareScope/actions/workflows/ci.yml/badge.svg)](https://github.com/Aydren1/HardwareScope/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/Aydren1/HardwareScope)](https://github.com/Aydren1/HardwareScope/releases/latest)
 
-Website: **https://aydren1.github.io/HardwareScope/**
-
-HardwareScope is a lightweight, read-only Windows hardware monitor with live temperatures, usage, clock speeds, power, fan data, and a configurable on-screen display.
+HardwareScope is a lightweight, read-only Windows hardware monitor written in
+C++23 with Win32, Direct2D, and DirectWrite. It provides live hardware sensors,
+a configurable on-screen display, and game-only FPS monitoring without a web
+runtime or managed UI framework.
 
 ## Download
 
-Use the [latest release](../../releases/latest) to download the current x64 Windows installer.
+Open the [latest release](https://github.com/Aydren1/HardwareScope/releases/latest)
+and download `HardwareScope-Setup-<version>-x64.exe` under **Assets**.
 
-Current release: **HardwareScope 1.7.6**
+HardwareScope is currently unsigned. Windows may show an **Unknown publisher**
+or SmartScreen warning. Every release includes `SHA256SUMS.txt` so the installer
+can be verified before it is opened.
 
-Version 1.7.6 adds default-on game-only FPS display and substantially reduces background capture work. FPS tracing stays completely off on the desktop, DXGI and Direct3D 9 events are filtered to the detected game process, and the graphics-kernel provider starts only as a delayed compatibility fallback.
+## Highlights
 
-Version 1.7.5 fixes the automatic updater closing HardwareScope without reliably installing or reopening it. Updates now use a detached handoff that waits for the app to exit, runs the verified installer, records the result, and reopens HardwareScope only after installation completes.
+- CPU, GPU, storage, memory, motherboard, fan, power, voltage, usage, and clock
+  telemetry when supported by the installed hardware
+- Searchable sensor table organized into collapsible sections
+- Dark and light themes with configurable accent/text colors
+- Compact OSD with corner placement, vertical or horizontal layout, spacing,
+  opacity, and scaling controls
+- Configurable EZ temperature selection for CPU, GPU core, and GPU memory
+- Independent, game-only FPS capture and display settings
+- Minimize-to-tray behavior, startup options, and single-instance enforcement
+- Verified GitHub updates with installer size and SHA-256 validation
+- Statically linked MSVC runtime; no separate Visual C++ redistributable needed
 
-Version 1.7.4 fixes the FPS counter staying at `-` in games. It replaces the unreliable PresentMon console/CSV child process with a narrowly filtered in-process Windows graphics trace, calculates FPS from original frame timestamps, follows the foreground 3D process, and keeps capture bounded and off the UI thread.
+## Sensor access and safety
 
-Version 1.7.3 makes blank areas across the complete top headers genuinely draggable by giving the visually transparent WPF header surfaces an active hit-test background. The main window and Settings can now be moved from any non-interactive part of their headers.
+HardwareScope reads telemetry only. It does not change voltages, fan curves,
+clock speeds, memory timings, or power limits. Its Windows service performs the
+small amount of privileged read-only sensor access that cannot be done from the
+normal desktop process.
 
-Version 1.7.2 makes the full non-interactive top header draggable in both application windows. It also replaces foreground-only FPS capture with an HWiNFO-style continuous PresentMon session that automatically follows the active 3D process with the highest frame rate. FPS reads are lock-free, rate-limited, memory-bounded, and cannot block the interface during high-frame-rate gameplay.
-
-Version 1.7.1 gives FPS its own low-latency refresh and smoothing controls, independent from temperature and hardware polling. It also replaces the separate Windows title bars with seamless draggable headers and matching in-app window controls.
-
-Version 1.7.0 adds an optional live FPS counter for the foreground game or 3D application. FPS is pinned first in the OSD and has independent color and 50–200% scale controls. The bundled PresentMon capture engine starts only when FPS monitoring is enabled.
-
-Version 1.6.5 adds a fully horizontal OSD layout with Tight, Normal, or Wide spacing; 50–200% scaling; and NVIDIA-style `│` separators between CPU, GPU, storage, memory, and system readings.
-
-Version 1.6.4 removes the redundant HardwareScope heading from the on-screen display so selected sensor readings use less space.
-
-Version 1.6.3 prevents automatic and manual updates from downloading concurrently, adds safe retries with unique temporary files, and validates both the installer size and SHA-256 checksum.
-
-Version 1.6.2 fixes Setup error 740 after interactive installation. The optional **Launch HardwareScope** action now uses the administrator credentials already approved for Setup.
-
-Version 1.6.1 sends HardwareScope to the notification tray when the standard minimize button is clicked, removing it from the taskbar while monitoring continues. Double-click the tray icon to reopen it, or right-click for Open and Exit actions. This behavior is configurable under Settings > Startup & tray.
-
-Only one HardwareScope instance runs at a time. Launching the app again restores and focuses the existing window, including when it is hidden in the tray.
-
-Hover over any table heading or sensor for one second to see a short plain-language explanation. OSD is identified as the On-Screen Display, while recognized CPU, GPU, storage, and health readings receive more specific descriptions.
-
-Settings includes manual and automatic stable updates. HardwareScope downloads new installers from the official GitHub release, verifies the published SHA-256 checksum, installs silently, and relaunches itself.
-
-The stable update manifest is published automatically only after GitHub has made the release installer public and the release workflow has verified its URL, byte size, and SHA-256 checksum. See [RELEASING.md](RELEASING.md).
-
-> HardwareScope is currently unsigned. Windows may display an **Unknown publisher** or SmartScreen warning. Verify the published SHA-256 checksum before installing.
+Unsupported or ambiguous readings are omitted instead of being guessed. Sensor
+coverage depends on the CPU, GPU, motherboard controller, DIMMs, storage
+firmware, and available vendor interfaces.
 
 ## Requirements
 
 - Windows 10 or Windows 11
 - 64-bit processor
-- Administrator access for low-level sensors
+- Administrator approval during installation
 
-## Safety
+## Build from source
 
-HardwareScope reads sensor telemetry only. It does not change voltages, fan curves, clock speeds, or power limits.
+Prerequisites:
+
+- Visual Studio 2022 or newer with Desktop development with C++
+- CMake 3.28 or newer
+- Inno Setup 6 to create the installer
+
+```powershell
+cmake --preset windows-x64-release
+cmake --build --preset windows-x64-release
+ctest --preset windows-x64-release
+```
+
+The production application is written to
+`out/build/x64-release/Release/HardwareScopeNative.exe`. The project also builds
+separate test/probe executables; test-only window hooks are not compiled into
+the packaged application.
+
+## Project layout
+
+- `src/` and `include/` — application, OSD, sensor providers, updater, and service
+- `resources/` — application assets and embedded read-only PawnIO modules
+- `installer/` — Inno Setup template
+- `tests/` — deterministic core, UI, updater, hardware, and soak probes
+- `docs/` — architecture, performance budgets, and second-PC validation
+- `third_party/` — pinned runtime dependencies included with attribution
+
+See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for dependency and license
+details, and [RELEASING.md](RELEASING.md) for the verified release process.
 
 ## License
 
-See [LICENSE.txt](LICENSE.txt).
+HardwareScope is released under the terms in [LICENSE.txt](LICENSE.txt).

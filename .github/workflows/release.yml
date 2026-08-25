@@ -1,0 +1,118 @@
+name: Build and publish release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: hardwarescope-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-test-release:
+    runs-on: windows-latest
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v5
+
+      - name: Validate tag and project version
+        id: version
+        shell: pwsh
+        run: |
+          $tag = '${{ github.ref_name }}'
+          if ($tag -notmatch '^v(?<version>[0-9]+\.[0-9]+\.[0-9]+)$') {
+            throw "Release tag is not semantic: $tag"
+          }
+          $version = $Matches.version
+          $cmake = Get-Content -LiteralPath CMakeLists.txt -Raw
+          if ($cmake -notmatch 'project\(HardwareScopeNative VERSION (?<project>[0-9]+\.[0-9]+\.[0-9]+)') {
+            throw 'Could not read the CMake project version.'
+          }
+          if ($Matches.project -ne $version) {
+            throw "Tag $version does not match CMake version $($Matches.project)."
+          }
+          $notes = "RELEASE_NOTES_$version.md"
+          if (-not (Test-Path -LiteralPath $notes)) {
+            throw "Missing $notes"
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "notes=$notes" >> $env:GITHUB_OUTPUT
+
+      - name: Configure x64 Release
+        run: >-
+          cmake -S . -B out/build/x64-release
+          -G "Visual Studio 17 2022" -A x64
+          -DBUILD_TESTING=ON
+
+      - name: Build x64 Release
+        shell: pwsh
+        run: |
+          $targets = @(
+            'HardwareScopeNative',
+            'HardwareScopeNativeSensorService',
+            'HardwareScopeNativeTests',
+            'HardwareScopeNativeUpdaterRecoveryTests'
+          )
+          foreach ($target in $targets) {
+            cmake --build out/build/x64-release --config Release --target $target
+            if ($LASTEXITCODE -ne 0) { throw "Build failed for $target" }
+          }
+
+      - name: Run deterministic tests
+        run: ctest --test-dir out/build/x64-release -C Release --output-on-failure
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+
+      - name: Create installer, portable ZIP, and checksums
+        shell: pwsh
+        run: |
+          $version = '${{ steps.version.outputs.version }}'
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path -LiteralPath $iscc)) {
+            throw "Inno Setup compiler not found at $iscc"
+          }
+          & $iscc 'out/build/x64-release/HardwareScope.iss'
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with $LASTEXITCODE" }
+
+          New-Item -ItemType Directory -Path out/packages -Force | Out-Null
+          cpack -G ZIP -C Release --config out/build/x64-release/CPackConfig.cmake -B out/packages
+          if ($LASTEXITCODE -ne 0) { throw "CPack failed with $LASTEXITCODE" }
+
+          $installer = Get-Item -LiteralPath "out/packages/HardwareScope-Setup-$version-x64.exe"
+          $portable = Get-Item -LiteralPath "out/packages/HardwareScope-$version-x64.zip"
+          $lines = foreach ($file in @($installer, $portable)) {
+            $hash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($file.Name)"
+          }
+          [IO.File]::WriteAllLines(
+            (Join-Path $PWD 'out/packages/SHA256SUMS.txt'),
+            $lines,
+            [Text.UTF8Encoding]::new($false))
+
+      - name: Upload release build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: HardwareScope-${{ steps.version.outputs.version }}-x64
+          path: |
+            out/packages/HardwareScope-Setup-${{ steps.version.outputs.version }}-x64.exe
+            out/packages/HardwareScope-${{ steps.version.outputs.version }}-x64.zip
+            out/packages/SHA256SUMS.txt
+          if-no-files-found: error
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: HardwareScope ${{ steps.version.outputs.version }}
+          body_path: ${{ steps.version.outputs.notes }}
+          make_latest: true
+          fail_on_unmatched_files: true
+          files: |
+            out/packages/HardwareScope-Setup-${{ steps.version.outputs.version }}-x64.exe
+            out/packages/HardwareScope-${{ steps.version.outputs.version }}-x64.zip
+            out/packages/SHA256SUMS.txt

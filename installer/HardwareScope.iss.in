@@ -1,0 +1,94 @@
+#define AppVersion "@PROJECT_VERSION@"
+#define BuildDirectory "@CMAKE_CURRENT_BINARY_DIR@/Release"
+#define SourceDirectory "@CMAKE_CURRENT_SOURCE_DIR@"
+
+[Setup]
+#ifdef SmokeTest
+AppId={{0C23B63A-B419-46D3-BC34-F87742F64DB6}
+PrivilegesRequired=lowest
+OutputBaseFilename=HardwareScope-Setup-{#AppVersion}-smoke-x64
+#else
+#ifdef AdminSmokeTest
+AppId={{B9E895D1-A80B-4C69-B5D6-F66B365BB338}
+OutputBaseFilename=HardwareScope-Setup-{#AppVersion}-admin-smoke-x64
+#else
+AppId={{50EC77EE-2969-45F1-A6DB-A6D225C1BBF1}
+OutputBaseFilename=HardwareScope-Setup-{#AppVersion}-x64
+#endif
+PrivilegesRequired=admin
+#endif
+AppName=HardwareScope
+AppVersion={#AppVersion}
+AppPublisher=HardwareScope
+AppPublisherURL=https://github.com/Aydren1/HardwareScope
+DefaultDirName={autopf}\HardwareScope
+DefaultGroupName=HardwareScope
+DisableProgramGroupPage=yes
+OutputDir=@CMAKE_CURRENT_SOURCE_DIR@/out/packages
+SetupIconFile={#SourceDirectory}/resources/HardwareScope.ico
+UninstallDisplayIcon={app}\HardwareScope.exe
+LicenseFile=@CMAKE_CURRENT_SOURCE_DIR@/LICENSE.txt
+Compression=lzma2/max
+SolidCompression=yes
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
+CloseApplications=force
+RestartApplications=no
+WizardStyle=modern
+
+[Files]
+Source: "{#BuildDirectory}/HardwareScopeNative.exe"; DestDir: "{app}"; DestName: "HardwareScope.exe"; Flags: ignoreversion
+Source: "{#BuildDirectory}/HardwareScopeNativeUpdater.exe"; DestDir: "{app}"; DestName: "HardwareScopeUpdater.exe"; Flags: ignoreversion
+Source: "{#BuildDirectory}/HardwareScopeNativeSensorService.exe"; DestDir: "{app}"; DestName: "HardwareScopeSensorService.exe"; Flags: ignoreversion
+Source: "@CMAKE_CURRENT_SOURCE_DIR@/third_party/presentmon/PresentMon-2.4.1-x64.exe"; DestDir: "{app}"; DestName: "PresentMon.exe"; Flags: ignoreversion
+Source: "@CMAKE_CURRENT_SOURCE_DIR@/LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "@CMAKE_CURRENT_SOURCE_DIR@/THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
+
+[Icons]
+#ifdef SmokeTest
+Name: "{app}\HardwareScope smoke shortcut"; Filename: "{app}\HardwareScope.exe"; WorkingDir: "{app}"
+#else
+#ifdef AdminSmokeTest
+Name: "{app}\HardwareScope admin smoke shortcut"; Filename: "{app}\HardwareScope.exe"; WorkingDir: "{app}"
+#else
+Name: "{autodesktop}\HardwareScope"; Filename: "{app}\HardwareScope.exe"; WorkingDir: "{app}"
+Name: "{group}\HardwareScope"; Filename: "{app}\HardwareScope.exe"; WorkingDir: "{app}"
+Name: "{group}\Uninstall HardwareScope"; Filename: "{uninstallexe}"
+#endif
+#endif
+
+[Run]
+Filename: "{app}\HardwareScope.exe"; Description: "Launch HardwareScope"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent runasoriginaluser
+
+#ifndef SmokeTest
+[UninstallRun]
+Filename: "{app}\HardwareScopeSensorService.exe"; Parameters: "--uninstall"; Flags: runhidden waituntilterminated; RunOnceId: "RemoveHardwareScopeSensorService"
+#endif
+
+#ifndef SmokeTest
+[Code]
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  ServicePath: String;
+  ResultCode: Integer;
+begin
+  Result := '';
+  ServicePath := ExpandConstant('{app}\HardwareScopeSensorService.exe');
+  if FileExists(ServicePath) then
+  begin
+    if (not Exec(ServicePath, '--uninstall', '', SW_HIDE, ewWaitUntilTerminated, ResultCode)) or (ResultCode <> 0) then
+      Result := 'HardwareScope could not stop the existing sensor service. Setup did not replace the installation.';
+  end;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  ResultCode: Integer;
+begin
+  if CurStep = ssPostInstall then
+  begin
+    if (not Exec(ExpandConstant('{app}\HardwareScopeSensorService.exe'), '--install', '', SW_HIDE, ewWaitUntilTerminated, ResultCode)) or (ResultCode <> 0) then
+      RaiseException('HardwareScope could not install its read-only sensor service.');
+  end;
+end;
+#endif
