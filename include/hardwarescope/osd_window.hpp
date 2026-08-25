@@ -7,9 +7,14 @@
 
 namespace hardwarescope {
 
+enum class OsdWindowRole : std::uint8_t {
+    primary,
+    fps,
+};
+
 class OsdWindow final {
 public:
-    explicit OsdWindow(HINSTANCE instance) noexcept;
+    explicit OsdWindow(HINSTANCE instance, OsdWindowRole role = OsdWindowRole::primary) noexcept;
     ~OsdWindow();
 
     OsdWindow(const OsdWindow&) = delete;
@@ -24,10 +29,12 @@ public:
     [[nodiscard]] HWND Handle() const noexcept { return window_; }
 
     static constexpr wchar_t kWindowClass[] = L"HardwareScope.Native.OsdWindow";
+    static constexpr wchar_t kFpsWindowClass[] = L"HardwareScope.Native.FpsOsdWindow";
 
 private:
     static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wparam, LPARAM lparam) noexcept;
     [[nodiscard]] bool RegisterWindowClass() const noexcept;
+    [[nodiscard]] const wchar_t* WindowClassName() const noexcept;
     [[nodiscard]] bool EnsureSurface(int width, int height) noexcept;
     void DestroySurface() noexcept;
     void RecreateFonts() noexcept;
@@ -37,6 +44,7 @@ private:
     void Position(int width, int height) noexcept;
 
     HINSTANCE instance_{};
+    OsdWindowRole role_{OsdWindowRole::primary};
     HWND window_{};
     HWND monitor_anchor_{};
     UINT dpi_{96U};

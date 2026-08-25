@@ -60,6 +60,23 @@ const wchar_t* SensorSectionName(const SensorSection section) noexcept {
     return L"Sensors";
 }
 
+std::uint32_t SensorSectionColor(const SensorSection section, const AppSettings& settings) noexcept {
+    std::uint32_t color = settings.text_color_rgb;
+    switch (section) {
+    case SensorSection::cpu_temperatures: color = settings.cpu_temperature_color_rgb; break;
+    case SensorSection::cpu_usage: color = settings.cpu_usage_color_rgb; break;
+    case SensorSection::cpu_clock_speeds: color = settings.cpu_clock_color_rgb; break;
+    case SensorSection::cpu_power_and_voltage: color = settings.cpu_power_color_rgb; break;
+    case SensorSection::graphics: color = settings.graphics_color_rgb; break;
+    case SensorSection::storage: color = settings.storage_color_rgb; break;
+    case SensorSection::memory: color = settings.memory_color_rgb; break;
+    case SensorSection::system_and_other: color = settings.system_color_rgb; break;
+    case SensorSection::frame_rate: color = settings.fps_color_rgb; break;
+    case SensorSection::count: break;
+    }
+    return color == AppSettings::kMatchAccentColor ? settings.text_color_rgb : color & 0xFFFFFFU;
+}
+
 SensorView BuildSensorView(
     const SensorSnapshot& snapshot,
     const std::uint32_t collapsed_sections,

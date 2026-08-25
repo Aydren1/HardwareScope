@@ -27,6 +27,7 @@ CoordinatorState& SharedState() noexcept {
 struct Work final {
     HWND window{};
     bool automatic{};
+    std::optional<SemanticVersion> skipped_version;
 };
 
 unsigned __stdcall CheckThread(void* const parameter) noexcept {
@@ -40,6 +41,11 @@ unsigned __stdcall CheckThread(void* const parameter) noexcept {
         HARDWARESCOPE_VERSION_PATCH});
     completion.system_error = check.system_error;
     if (check.status == UpdateCheckStatus::current) {
+        completion.status = UpdateCompletionStatus::current;
+    } else if (check.status == UpdateCheckStatus::available
+        && work->automatic
+        && work->skipped_version
+        && check.manifest.version == *work->skipped_version) {
         completion.status = UpdateCompletionStatus::current;
     } else if (check.status == UpdateCheckStatus::available) {
         const auto installer = DownloadVerifiedInstaller(check.manifest);
@@ -66,7 +72,10 @@ unsigned __stdcall CheckThread(void* const parameter) noexcept {
 
 } // namespace
 
-bool BeginNativeUpdateCheck(const HWND notification_window, const bool automatic) noexcept {
+bool BeginNativeUpdateCheck(
+    const HWND notification_window,
+    const bool automatic,
+    std::optional<SemanticVersion> skipped_version) noexcept {
     if (notification_window == nullptr) return false;
     auto& state = SharedState();
     bool expected{};
@@ -75,6 +84,7 @@ bool BeginNativeUpdateCheck(const HWND notification_window, const bool automatic
         auto work = std::make_unique<Work>();
         work->window = notification_window;
         work->automatic = automatic;
+        work->skipped_version = std::move(skipped_version);
         const auto thread = reinterpret_cast<HANDLE>(_beginthreadex(nullptr, 0U, &CheckThread, work.get(), 0U, nullptr));
         if (thread == nullptr) {
             state.update_in_progress.store(false, std::memory_order_release);

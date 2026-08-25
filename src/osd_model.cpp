@@ -1,4 +1,5 @@
 #include "hardwarescope/osd_model.hpp"
+#include "hardwarescope/sensor_view_model.hpp"
 
 #include <algorithm>
 #include <array>
@@ -72,7 +73,7 @@ std::vector<OsdDisplayItem> BuildOsdDisplayItems(const SensorSnapshot& snapshot,
             sensor.id,
             LabelFor(sensor) + L" " + FormattedValue(sensor),
             GroupFor(sensor),
-            fps ? settings.fps_color_rgb : settings.text_color_rgb,
+            SensorSectionColor(ClassifySensor(sensor), settings),
             fps});
     };
 
@@ -112,6 +113,19 @@ std::vector<OsdDisplayItem> BuildOsdDisplayItems(const SensorSnapshot& snapshot,
             }
         }
     }
+    return items;
+}
+
+std::vector<OsdDisplayItem> BuildOsdSurfaceItems(
+    const SensorSnapshot& snapshot,
+    const AppSettings& settings,
+    const bool fps_surface) {
+    auto items = BuildOsdDisplayItems(snapshot, settings);
+    if (!settings.fps_separate_position) {
+        if (fps_surface) items.clear();
+        return items;
+    }
+    std::erase_if(items, [fps_surface](const OsdDisplayItem& item) { return item.fps != fps_surface; });
     return items;
 }
 

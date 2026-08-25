@@ -26,7 +26,10 @@ struct UpdateCompletion final {
     bool automatic{};
 };
 
-[[nodiscard]] bool BeginNativeUpdateCheck(HWND notification_window, bool automatic) noexcept;
+[[nodiscard]] bool BeginNativeUpdateCheck(
+    HWND notification_window,
+    bool automatic,
+    std::optional<SemanticVersion> skipped_version = std::nullopt) noexcept;
 [[nodiscard]] std::optional<UpdateCompletion> TakeNativeUpdateCompletion() noexcept;
 
 } // namespace hardwarescope

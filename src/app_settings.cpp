@@ -97,11 +97,27 @@ void WriteBoolean(std::ostream& stream, const char* key, const bool value) {
     stream << key << '=' << (value ? 1 : 0) << '\n';
 }
 
+void NormalizeCategoryColor(std::uint32_t& color) noexcept {
+    if (color != AppSettings::kMatchAccentColor) color &= 0xFFFFFFU;
+}
+
+void WriteColor(std::ostream& stream, const char* key, const std::uint32_t color) {
+    stream << key << '=' << std::uppercase << std::hex << std::setw(8) << std::setfill('0') << color << std::dec << '\n';
+}
+
 } // namespace
 
 void AppSettings::Normalize() noexcept {
     refresh_interval_ms = std::clamp(refresh_interval_ms, 100U, 10'000U);
     text_color_rgb &= 0xFFFFFFU;
+    NormalizeCategoryColor(cpu_temperature_color_rgb);
+    NormalizeCategoryColor(cpu_usage_color_rgb);
+    NormalizeCategoryColor(cpu_clock_color_rgb);
+    NormalizeCategoryColor(cpu_power_color_rgb);
+    NormalizeCategoryColor(graphics_color_rgb);
+    NormalizeCategoryColor(storage_color_rgb);
+    NormalizeCategoryColor(memory_color_rgb);
+    NormalizeCategoryColor(system_color_rgb);
     osd_opacity_percent = std::clamp(osd_opacity_percent, 10U, 100U);
     osd_scale_percent = std::clamp(osd_scale_percent, 50U, 250U);
     osd_spacing_px = std::min(osd_spacing_px, 64U);
@@ -156,8 +172,16 @@ bool SettingsStore::Load(AppSettings& destination) const noexcept {
 
         AppSettings loaded{};
         loaded.refresh_interval_ms = IntegerValue(values, "refresh_interval_ms", loaded.refresh_interval_ms);
-        loaded.theme = EnumValue(values, "theme", loaded.theme, 1U);
+        loaded.theme = EnumValue(values, "theme", loaded.theme, 2U);
         loaded.text_color_rgb = IntegerValue(values, "text_color_rgb", loaded.text_color_rgb, 16);
+        loaded.cpu_temperature_color_rgb = IntegerValue(values, "cpu_temperature_color_rgb", loaded.cpu_temperature_color_rgb, 16);
+        loaded.cpu_usage_color_rgb = IntegerValue(values, "cpu_usage_color_rgb", loaded.cpu_usage_color_rgb, 16);
+        loaded.cpu_clock_color_rgb = IntegerValue(values, "cpu_clock_color_rgb", loaded.cpu_clock_color_rgb, 16);
+        loaded.cpu_power_color_rgb = IntegerValue(values, "cpu_power_color_rgb", loaded.cpu_power_color_rgb, 16);
+        loaded.graphics_color_rgb = IntegerValue(values, "graphics_color_rgb", loaded.graphics_color_rgb, 16);
+        loaded.storage_color_rgb = IntegerValue(values, "storage_color_rgb", loaded.storage_color_rgb, 16);
+        loaded.memory_color_rgb = IntegerValue(values, "memory_color_rgb", loaded.memory_color_rgb, 16);
+        loaded.system_color_rgb = IntegerValue(values, "system_color_rgb", loaded.system_color_rgb, 16);
         loaded.start_with_windows = BooleanValue(values, "start_with_windows", loaded.start_with_windows);
         loaded.start_minimized = BooleanValue(values, "start_minimized", loaded.start_minimized);
         loaded.show_osd = BooleanValue(values, "show_osd", loaded.show_osd);
@@ -172,11 +196,17 @@ bool SettingsStore::Load(AppSettings& destination) const noexcept {
         loaded.easy_temperature_mask = IntegerValue(values, "easy_temperature_mask", loaded.easy_temperature_mask);
         loaded.fps_enabled = BooleanValue(values, "fps_enabled", loaded.fps_enabled);
         loaded.fps_game_only = BooleanValue(values, "fps_game_only", loaded.fps_game_only);
+        loaded.fps_separate_position = BooleanValue(values, "fps_separate_position", loaded.fps_separate_position);
+        loaded.fps_osd_position = EnumValue(values, "fps_osd_position", loaded.fps_osd_position, 3U);
         loaded.fps_refresh_interval_ms = IntegerValue(values, "fps_refresh_interval_ms", loaded.fps_refresh_interval_ms);
         loaded.fps_smoothing_interval_ms = IntegerValue(values, "fps_smoothing_interval_ms", loaded.fps_smoothing_interval_ms);
         loaded.fps_color_rgb = IntegerValue(values, "fps_color_rgb", loaded.fps_color_rgb, 16);
         loaded.fps_scale_percent = IntegerValue(values, "fps_scale_percent", loaded.fps_scale_percent);
         loaded.automatic_updates = BooleanValue(values, "automatic_updates", loaded.automatic_updates);
+        loaded.update_snooze_until_unix_seconds = IntegerValue(values, "update_snooze_until_unix_seconds", loaded.update_snooze_until_unix_seconds);
+        loaded.skipped_update_major = IntegerValue(values, "skipped_update_major", loaded.skipped_update_major);
+        loaded.skipped_update_minor = IntegerValue(values, "skipped_update_minor", loaded.skipped_update_minor);
+        loaded.skipped_update_patch = IntegerValue(values, "skipped_update_patch", loaded.skipped_update_patch);
         loaded.collapsed_sections = IntegerValue(values, "collapsed_sections", loaded.collapsed_sections);
         loaded.pinned_sensor_ids = ParsePinnedSensors(values, loaded.pinned_sensor_count);
         loaded.Normalize();
@@ -203,6 +233,14 @@ bool SettingsStore::Save(const AppSettings& settings) const noexcept {
         stream << "refresh_interval_ms=" << normalized.refresh_interval_ms << '\n';
         stream << "theme=" << static_cast<unsigned>(normalized.theme) << '\n';
         stream << "text_color_rgb=" << std::uppercase << std::hex << std::setw(6) << std::setfill('0') << normalized.text_color_rgb << std::dec << '\n';
+        WriteColor(stream, "cpu_temperature_color_rgb", normalized.cpu_temperature_color_rgb);
+        WriteColor(stream, "cpu_usage_color_rgb", normalized.cpu_usage_color_rgb);
+        WriteColor(stream, "cpu_clock_color_rgb", normalized.cpu_clock_color_rgb);
+        WriteColor(stream, "cpu_power_color_rgb", normalized.cpu_power_color_rgb);
+        WriteColor(stream, "graphics_color_rgb", normalized.graphics_color_rgb);
+        WriteColor(stream, "storage_color_rgb", normalized.storage_color_rgb);
+        WriteColor(stream, "memory_color_rgb", normalized.memory_color_rgb);
+        WriteColor(stream, "system_color_rgb", normalized.system_color_rgb);
         WriteBoolean(stream, "start_with_windows", normalized.start_with_windows);
         WriteBoolean(stream, "start_minimized", normalized.start_minimized);
         WriteBoolean(stream, "show_osd", normalized.show_osd);
@@ -217,11 +255,17 @@ bool SettingsStore::Save(const AppSettings& settings) const noexcept {
         stream << "easy_temperature_mask=" << normalized.easy_temperature_mask << '\n';
         WriteBoolean(stream, "fps_enabled", normalized.fps_enabled);
         WriteBoolean(stream, "fps_game_only", normalized.fps_game_only);
+        WriteBoolean(stream, "fps_separate_position", normalized.fps_separate_position);
+        stream << "fps_osd_position=" << static_cast<unsigned>(normalized.fps_osd_position) << '\n';
         stream << "fps_refresh_interval_ms=" << normalized.fps_refresh_interval_ms << '\n';
         stream << "fps_smoothing_interval_ms=" << normalized.fps_smoothing_interval_ms << '\n';
         stream << "fps_color_rgb=" << std::uppercase << std::hex << std::setw(6) << std::setfill('0') << normalized.fps_color_rgb << std::dec << '\n';
         stream << "fps_scale_percent=" << normalized.fps_scale_percent << '\n';
         WriteBoolean(stream, "automatic_updates", normalized.automatic_updates);
+        stream << "update_snooze_until_unix_seconds=" << normalized.update_snooze_until_unix_seconds << '\n';
+        stream << "skipped_update_major=" << normalized.skipped_update_major << '\n';
+        stream << "skipped_update_minor=" << normalized.skipped_update_minor << '\n';
+        stream << "skipped_update_patch=" << normalized.skipped_update_patch << '\n';
         stream << "collapsed_sections=" << normalized.collapsed_sections << '\n';
         stream << "pinned_sensor_ids=";
         for (std::uint32_t index = 0; index < normalized.pinned_sensor_count; ++index) {

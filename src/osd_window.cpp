@@ -21,7 +21,8 @@ SIZE TextSize(const HDC dc, const HFONT font, const std::wstring& text) noexcept
 
 } // namespace
 
-OsdWindow::OsdWindow(const HINSTANCE instance) noexcept : instance_(instance) {}
+OsdWindow::OsdWindow(const HINSTANCE instance, const OsdWindowRole role) noexcept
+    : instance_(instance), role_(role) {}
 
 OsdWindow::~OsdWindow() {
     if (window_ != nullptr) DestroyWindow(window_);
@@ -36,8 +37,8 @@ bool OsdWindow::Initialize(const HWND monitor_anchor, const AppSettings& setting
     if (!RegisterWindowClass()) return false;
     window_ = CreateWindowExW(
         WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
-        kWindowClass,
-        L"HardwareScope OSD",
+        WindowClassName(),
+        role_ == OsdWindowRole::fps ? L"HardwareScope FPS OSD" : L"HardwareScope OSD",
         WS_POPUP,
         0,
         0,
@@ -77,8 +78,12 @@ bool OsdWindow::RegisterWindowClass() const noexcept {
     window_class.lpfnWndProc = &OsdWindow::WindowProcedure;
     window_class.hInstance = instance_;
     window_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    window_class.lpszClassName = kWindowClass;
+    window_class.lpszClassName = WindowClassName();
     return RegisterClassExW(&window_class) != 0 || GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
+}
+
+const wchar_t* OsdWindow::WindowClassName() const noexcept {
+    return role_ == OsdWindowRole::fps ? kFpsWindowClass : kWindowClass;
 }
 
 LRESULT CALLBACK OsdWindow::WindowProcedure(const HWND window, const UINT message, const WPARAM wparam, const LPARAM lparam) noexcept {
@@ -155,7 +160,7 @@ void OsdWindow::DestroySurface() noexcept {
 
 void OsdWindow::Render() noexcept {
     if (window_ == nullptr || !visible_) return;
-    const auto items = BuildOsdDisplayItems(snapshot_, settings_);
+    const auto items = BuildOsdSurfaceItems(snapshot_, settings_, role_ == OsdWindowRole::fps);
     if (items.empty()) {
         ShowWindow(window_, SW_HIDE);
         return;
@@ -237,7 +242,7 @@ void OsdWindow::Render() noexcept {
         for (std::size_t index = 0; index < items.size(); ++index) {
             if (have_previous) x += spacing;
             if (have_previous && settings_.osd_group_separators && items[index].group != OsdHardwareGroup::fps && previous_group != items[index].group) {
-                OsdDisplayItem separator{0U, L"|", items[index].group, settings_.text_color_rgb, false};
+                OsdDisplayItem separator{0U, L"|", items[index].group, items[index].color_rgb, false};
                 const auto separator_size = TextSize(memory_dc_, sensor_font_, separator.text);
                 draw_item(separator, separator_size, x, padding);
                 x += separator_size.cx + spacing;
@@ -278,8 +283,9 @@ void OsdWindow::Position(const int width, const int height) noexcept {
     const auto margin = ScaleForDpi(12);
     int x = information.rcWork.left + margin;
     int y = information.rcWork.top + margin;
-    if (settings_.osd_position == OsdPosition::top_right || settings_.osd_position == OsdPosition::bottom_right) x = information.rcWork.right - width - margin;
-    if (settings_.osd_position == OsdPosition::bottom_left || settings_.osd_position == OsdPosition::bottom_right) y = information.rcWork.bottom - height - margin;
+    const auto position = role_ == OsdWindowRole::fps ? settings_.fps_osd_position : settings_.osd_position;
+    if (position == OsdPosition::top_right || position == OsdPosition::bottom_right) x = information.rcWork.right - width - margin;
+    if (position == OsdPosition::bottom_left || position == OsdPosition::bottom_right) y = information.rcWork.bottom - height - margin;
     static_cast<void>(SetWindowPos(window_, HWND_TOPMOST, x, y, width, height, SWP_NOACTIVATE | SWP_NOOWNERZORDER));
 }
 

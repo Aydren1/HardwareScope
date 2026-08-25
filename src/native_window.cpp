@@ -8,12 +8,14 @@
 #include "hardwarescope/window_regions.hpp"
 
 #include <d2d1helper.h>
+#include <commctrl.h>
 #include <dwmapi.h>
 #include <shellapi.h>
 #include <windowsx.h>
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cwctype>
 #include <cwchar>
@@ -24,12 +26,128 @@
 namespace hardwarescope {
 namespace {
 
-constexpr float kSearchTop = 94.0F;
-constexpr float kSearchHeight = 34.0F;
-constexpr float kTableTop = 138.0F;
-constexpr float kColumnHeaderHeight = 32.0F;
-constexpr float kSensorRowHeight = 36.0F;
+constexpr float kContentInset = 12.0F;
+constexpr float kSearchTop = 78.0F;
+constexpr float kSearchHeight = 32.0F;
+constexpr float kTableTop = 118.0F;
+constexpr float kColumnHeaderHeight = 29.0F;
+constexpr float kSensorRowHeight = 31.0F;
 const GUID kTrayIconGuid{0xE58BB907, 0x9AEF, 0x4E50, {0x9D, 0x2F, 0x5A, 0x65, 0xB4, 0xB4, 0x2D, 0x40}};
+
+using TableColumns = std::array<float, 7>;
+
+TableColumns CalculateTableColumns(const float left, const float table_width) noexcept {
+    // These proportions preserve useful sensor and hardware widths in the compact
+    // layout while keeping all six columns visible at the minimum window width.
+    return TableColumns{
+        left + 6.0F,
+        left + 46.0F,
+        left + table_width * 0.34F,
+        left + table_width * 0.49F,
+        left + table_width * 0.61F,
+        left + table_width * 0.73F,
+        left + table_width - 8.0F};
+}
+
+enum class UpdatePromptAction : std::uint8_t {
+    install_now,
+    remind_later,
+    skip_version,
+};
+
+struct UpdatePromptResult final {
+    UpdatePromptAction action{UpdatePromptAction::remind_later};
+    std::chrono::seconds delay{std::chrono::hours{24}};
+};
+
+std::uint64_t CurrentUnixSeconds() noexcept {
+    const auto count = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    return count > 0 ? static_cast<std::uint64_t>(count) : 0U;
+}
+
+bool SameVersion(const SemanticVersion& left, const SemanticVersion& right) noexcept {
+    return left.major == right.major && left.minor == right.minor && left.patch == right.patch;
+}
+
+std::optional<SemanticVersion> SkippedUpdateVersion(const AppSettings& settings) noexcept {
+    if (settings.skipped_update_major == 0U
+        && settings.skipped_update_minor == 0U
+        && settings.skipped_update_patch == 0U) return std::nullopt;
+    return SemanticVersion{
+        settings.skipped_update_major,
+        settings.skipped_update_minor,
+        settings.skipped_update_patch};
+}
+
+UpdatePromptResult ShowUpdatePrompt(const HWND owner, const UpdateManifest& manifest) noexcept {
+    wchar_t instruction[160]{};
+    static_cast<void>(swprintf_s(
+        instruction,
+        L"HardwareScope %u.%u.%u is ready",
+        manifest.version.major,
+        manifest.version.minor,
+        manifest.version.patch));
+
+    constexpr TASKDIALOG_BUTTON action_buttons[]{
+        {kUpdateNowButton, L"Update now\nClose HardwareScope and install the verified update."},
+        {kUpdateLaterButton, L"Remind me later\nKeep HardwareScope running and use the reminder selected below."},
+    };
+    constexpr TASKDIALOG_BUTTON reminder_buttons[]{
+        {kUpdateIn24HoursRadio, L"In 24 hours"},
+        {kUpdateIn3DaysRadio, L"In 3 days"},
+        {kUpdateIn1WeekRadio, L"In 1 week"},
+        {kSkipUpdateRadio, L"Never for this version"},
+    };
+
+    TASKDIALOGCONFIG configuration{};
+    configuration.cbSize = sizeof(configuration);
+    configuration.hwndParent = owner;
+    configuration.dwFlags = TDF_USE_COMMAND_LINKS | TDF_POSITION_RELATIVE_TO_WINDOW | TDF_ALLOW_DIALOG_CANCELLATION;
+    configuration.dwCommonButtons = TDCBF_CANCEL_BUTTON;
+    configuration.pszWindowTitle = L"HardwareScope update";
+    configuration.pszMainIcon = TD_INFORMATION_ICON;
+    configuration.pszMainInstruction = instruction;
+    configuration.pszContent = L"The installer was downloaded and verified. Choose whether to update now or when HardwareScope should remind you again.";
+    configuration.cButtons = static_cast<UINT>(std::size(action_buttons));
+    configuration.pButtons = action_buttons;
+    configuration.nDefaultButton = kUpdateNowButton;
+    configuration.cRadioButtons = static_cast<UINT>(std::size(reminder_buttons));
+    configuration.pRadioButtons = reminder_buttons;
+    configuration.nDefaultRadioButton = kUpdateIn24HoursRadio;
+
+    int button{};
+    int reminder{kUpdateIn24HoursRadio};
+    using TaskDialogIndirectFunction = HRESULT(WINAPI*)(const TASKDIALOGCONFIG*, int*, int*, BOOL*);
+    auto controls = GetModuleHandleW(L"comctl32.dll");
+    if (controls == nullptr) controls = LoadLibraryW(L"comctl32.dll");
+    const auto task_dialog = controls == nullptr
+        ? nullptr
+        : reinterpret_cast<TaskDialogIndirectFunction>(GetProcAddress(controls, "TaskDialogIndirect"));
+    const auto dialog_result = task_dialog == nullptr
+        ? E_NOTIMPL
+        : task_dialog(&configuration, &button, &reminder, nullptr);
+    if (FAILED(dialog_result)) {
+        wchar_t fallback[320]{};
+        static_cast<void>(swprintf_s(
+            fallback,
+            L"%s\n\nInstall the verified update now? Selecting No will remind you in 24 hours.",
+            instruction));
+        const auto choice = MessageBoxW(
+            owner,
+            fallback,
+            L"HardwareScope update",
+            MB_YESNO | MB_ICONINFORMATION);
+        return choice == IDYES
+            ? UpdatePromptResult{UpdatePromptAction::install_now, {}}
+            : UpdatePromptResult{};
+    }
+    if (button == kUpdateNowButton) return UpdatePromptResult{UpdatePromptAction::install_now, {}};
+    if (reminder == kSkipUpdateRadio) return UpdatePromptResult{UpdatePromptAction::skip_version, {}};
+    if (reminder == kUpdateIn3DaysRadio) return UpdatePromptResult{UpdatePromptAction::remind_later, std::chrono::hours{72}};
+    if (reminder == kUpdateIn1WeekRadio) return UpdatePromptResult{UpdatePromptAction::remind_later, std::chrono::hours{24 * 7}};
+    return UpdatePromptResult{};
+}
 
 const wchar_t* UnitSuffix(const SensorUnit unit) noexcept {
     switch (unit) {
@@ -66,7 +184,8 @@ NativeWindow::NativeWindow(const HINSTANCE instance) noexcept
     : instance_(instance),
       sensor_worker_(snapshots_, &NativeWindow::SnapshotPublished, this, SensorWorkerMode::native, instance),
       settings_store_(SettingsStore::DefaultPath()),
-      osd_window_(instance) {
+      osd_window_(instance, OsdWindowRole::primary),
+      fps_osd_window_(instance, OsdWindowRole::fps) {
     if (!settings_store_.Load(settings_)) {
         auto legacy_path = settings_store_.Path().parent_path();
         legacy_path /= L"settings.json";
@@ -133,8 +252,8 @@ bool NativeWindow::RegisterWindowClass() {
 bool NativeWindow::CreateNativeWindow(const int show_command) {
     const auto reported_dpi = GetDpiForSystem();
     const auto initial_dpi = reported_dpi == 0U ? 96U : reported_dpi;
-    const auto desired_width = MulDiv(1240, static_cast<int>(initial_dpi), 96);
-    const auto desired_height = MulDiv(790, static_cast<int>(initial_dpi), 96);
+    const auto desired_width = MulDiv(760, static_cast<int>(initial_dpi), 96);
+    const auto desired_height = MulDiv(820, static_cast<int>(initial_dpi), 96);
     RECT work_area{};
     static_cast<void>(SystemParametersInfoW(SPI_GETWORKAREA, 0, &work_area, 0));
     const auto width = std::min(desired_width, static_cast<int>(work_area.right - work_area.left));
@@ -162,7 +281,8 @@ bool NativeWindow::CreateNativeWindow(const int show_command) {
     taskbar_created_message_ = RegisterWindowMessageW(L"TaskbarCreated");
     static_cast<void>(AddTrayIcon());
     if (!osd_window_.Initialize(window_, settings_)) return false;
-    if (settings_.automatic_updates) static_cast<void>(SetTimer(window_, kStartupUpdateTimer, 5'000U, nullptr));
+    if (!fps_osd_window_.Initialize(window_, settings_)) return false;
+    ScheduleAutomaticUpdateCheck();
     if (settings_.start_minimized) {
         ShowWindow(window_, SW_HIDE);
     } else {
@@ -208,8 +328,8 @@ LRESULT NativeWindow::WindowProcedure(const UINT message, const WPARAM wparam, c
         const auto available_width = std::max(1L, monitor_information.rcWork.right - monitor_information.rcWork.left);
         const auto available_height = std::max(1L, monitor_information.rcWork.bottom - monitor_information.rcWork.top);
         information->ptMinTrackSize = POINT{
-            std::min(MulDiv(900, static_cast<int>(dpi_), 96), static_cast<int>(available_width)),
-            std::min(MulDiv(560, static_cast<int>(dpi_), 96), static_cast<int>(available_height))};
+            std::min(MulDiv(660, static_cast<int>(dpi_), 96), static_cast<int>(available_width)),
+            std::min(MulDiv(480, static_cast<int>(dpi_), 96), static_cast<int>(available_height))};
         return 0;
     }
     case WM_DPICHANGED: {
@@ -218,6 +338,7 @@ LRESULT NativeWindow::WindowProcedure(const UINT message, const WPARAM wparam, c
         SetWindowPos(window_, nullptr, suggested->left, suggested->top, suggested->right - suggested->left, suggested->bottom - suggested->top, SWP_NOACTIVATE | SWP_NOZORDER);
         DiscardDeviceResources();
         osd_window_.DisplayChanged();
+        fps_osd_window_.DisplayChanged();
         InvalidateRect(window_, nullptr, FALSE);
         return 0;
     }
@@ -226,6 +347,7 @@ LRESULT NativeWindow::WindowProcedure(const UINT message, const WPARAM wparam, c
         return 0;
     case WM_DISPLAYCHANGE:
         osd_window_.DisplayChanged();
+        fps_osd_window_.DisplayChanged();
         InvalidateRect(window_, nullptr, FALSE);
         return 0;
     case WM_POWERBROADCAST:
@@ -237,6 +359,7 @@ LRESULT NativeWindow::WindowProcedure(const UINT message, const WPARAM wparam, c
                 MSG pending{};
                 while (PeekMessageW(&pending, window_, kSnapshotMessage, kSnapshotMessage, PM_REMOVE)) {}
                 osd_window_.SetVisible(false);
+                fps_osd_window_.SetVisible(false);
             }
             return TRUE;
         }
@@ -247,6 +370,7 @@ LRESULT NativeWindow::WindowProcedure(const UINT message, const WPARAM wparam, c
                 while (PeekMessageW(&pending, window_, kSnapshotMessage, kSnapshotMessage, PM_REMOVE)) {}
                 resume_waiting_for_snapshot_ = true;
                 osd_window_.SetVisible(false);
+                fps_osd_window_.SetVisible(false);
                 sensor_worker_.Start(std::chrono::milliseconds{settings_.refresh_interval_ms});
             }
             return TRUE;
@@ -296,7 +420,9 @@ LRESULT NativeWindow::WindowProcedure(const UINT message, const WPARAM wparam, c
     case WM_TIMER:
         if (wparam == kStartupUpdateTimer) {
             KillTimer(window_, kStartupUpdateTimer);
-            static_cast<void>(BeginNativeUpdateCheck(window_, true));
+            if (!BeginNativeUpdateCheck(window_, true, SkippedUpdateVersion(settings_))) {
+                ScheduleAutomaticUpdateCheck(60'000U);
+            }
             return 0;
         }
         if (wparam == kTooltipTimer) {
@@ -353,10 +479,25 @@ LRESULT NativeWindow::WindowProcedure(const UINT message, const WPARAM wparam, c
             reinterpret_cast<LPARAM>(&target)));
         return static_cast<LRESULT>(dpi_);
     }
+    case kShowUpdatePromptTestMessage: {
+        UpdateManifest manifest{};
+        manifest.version = SemanticVersion{9U, 9U, 9U};
+        static_cast<void>(ShowUpdatePrompt(window_, manifest));
+        return 1;
+    }
+    case kQueueAutomaticUpdateNotificationTestMessage: {
+        UpdateCompletion completion{};
+        completion.status = UpdateCompletionStatus::ready;
+        completion.automatic = true;
+        completion.manifest.version = SemanticVersion{9U, 9U, 9U};
+        pending_update_ = completion;
+        return ShowUpdateNotification(completion) ? 1 : 0;
+    }
 #endif
     case kTrayMessage: {
         const auto tray_event = static_cast<UINT>(LOWORD(lparam));
-        if (tray_event == WM_LBUTTONUP || tray_event == NIN_SELECT || tray_event == NIN_KEYSELECT) RestoreFromTray();
+        if (tray_event == NIN_BALLOONUSERCLICK) PromptForPendingUpdate();
+        else if (tray_event == WM_LBUTTONUP || tray_event == NIN_SELECT || tray_event == NIN_KEYSELECT) RestoreFromTray();
         else if (tray_event == WM_RBUTTONUP || tray_event == WM_CONTEXTMENU) ShowTrayMenu();
         return 0;
     }
@@ -400,9 +541,11 @@ std::uint64_t NativeWindow::LatestSnapshotSequence() const noexcept {
 void NativeWindow::HandleSnapshotMessage() noexcept {
     snapshots_.ReadLatest(ui_snapshot_);
     osd_window_.Update(ui_snapshot_);
+    fps_osd_window_.Update(ui_snapshot_);
     if (resume_waiting_for_snapshot_) {
         resume_waiting_for_snapshot_ = false;
         osd_window_.SetVisible(settings_.show_osd);
+        fps_osd_window_.SetVisible(settings_.show_osd);
     }
     if (!in_size_move_.load(std::memory_order_acquire)) InvalidateRect(window_, nullptr, FALSE);
 }
@@ -430,6 +573,11 @@ bool NativeWindow::CreateDeviceResources() {
     if (FAILED(render_target_->CreateSolidColorBrush(Color(palette_.text), text_brush_.ReleaseAndGetAddressOf()))) return false;
     if (FAILED(render_target_->CreateSolidColorBrush(Color(palette_.muted), muted_brush_.ReleaseAndGetAddressOf()))) return false;
     if (FAILED(render_target_->CreateSolidColorBrush(Color(palette_.accent), accent_brush_.ReleaseAndGetAddressOf()))) return false;
+    for (std::size_t index = 0U; index < section_brushes_.size(); ++index) {
+        if (FAILED(render_target_->CreateSolidColorBrush(
+                Color(SensorSectionColor(static_cast<SensorSection>(index), settings_)),
+                section_brushes_[index].ReleaseAndGetAddressOf()))) return false;
+    }
     if (FAILED(render_target_->CreateSolidColorBrush(Color(palette_.line), line_brush_.ReleaseAndGetAddressOf()))) return false;
     if (FAILED(render_target_->CreateSolidColorBrush(Color(palette_.header), header_brush_.ReleaseAndGetAddressOf()))) return false;
     if (FAILED(render_target_->CreateSolidColorBrush(Color(palette_.surface), surface_brush_.ReleaseAndGetAddressOf()))) return false;
@@ -437,7 +585,7 @@ bool NativeWindow::CreateDeviceResources() {
     if (FAILED(render_target_->CreateSolidColorBrush(Color(0xE81123U), close_hover_brush_.ReleaseAndGetAddressOf()))) return false;
     if (FAILED(render_target_->CreateSolidColorBrush(Color(0xFFFFFFU), close_icon_brush_.ReleaseAndGetAddressOf()))) return false;
 
-    const auto icon_size = MulDiv(64, static_cast<int>(dpi_), 96);
+    const auto icon_size = MulDiv(48, static_cast<int>(dpi_), 96);
     const auto icon = static_cast<HICON>(LoadImageW(instance_, MAKEINTRESOURCEW(101), IMAGE_ICON, icon_size, icon_size, LR_DEFAULTCOLOR));
     if (icon != nullptr) {
         Microsoft::WRL::ComPtr<IWICBitmap> wic_bitmap;
@@ -456,11 +604,11 @@ bool NativeWindow::CreateDeviceResources() {
         DestroyIcon(icon);
     }
 
-    if (FAILED(dwrite_factory_->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 27.0F, L"en-US", title_format_.ReleaseAndGetAddressOf()))) return false;
-    if (FAILED(dwrite_factory_->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12.0F, L"en-US", subtitle_format_.ReleaseAndGetAddressOf()))) return false;
-    if (FAILED(dwrite_factory_->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 13.0F, L"en-US", body_format_.ReleaseAndGetAddressOf()))) return false;
-    if (FAILED(dwrite_factory_->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 13.0F, L"en-US", value_format_.ReleaseAndGetAddressOf()))) return false;
-    if (FAILED(dwrite_factory_->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12.5F, L"en-US", tooltip_format_.ReleaseAndGetAddressOf()))) return false;
+    if (FAILED(dwrite_factory_->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 22.0F, L"en-US", title_format_.ReleaseAndGetAddressOf()))) return false;
+    if (FAILED(dwrite_factory_->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 11.0F, L"en-US", subtitle_format_.ReleaseAndGetAddressOf()))) return false;
+    if (FAILED(dwrite_factory_->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12.0F, L"en-US", body_format_.ReleaseAndGetAddressOf()))) return false;
+    if (FAILED(dwrite_factory_->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12.0F, L"en-US", value_format_.ReleaseAndGetAddressOf()))) return false;
+    if (FAILED(dwrite_factory_->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 11.5F, L"en-US", tooltip_format_.ReleaseAndGetAddressOf()))) return false;
 
     for (const auto format : {subtitle_format_.Get(), body_format_.Get(), value_format_.Get()}) {
         format->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
@@ -488,6 +636,7 @@ void NativeWindow::DiscardDeviceResources() noexcept {
     surface_brush_.Reset();
     header_brush_.Reset();
     line_brush_.Reset();
+    for (auto& brush : section_brushes_) brush.Reset();
     accent_brush_.Reset();
     muted_brush_.Reset();
     text_brush_.Reset();
@@ -537,12 +686,12 @@ std::uint64_t NativeWindow::PaintP95Microseconds() const noexcept {
 }
 
 void NativeWindow::DrawSearch(const D2D1_SIZE_F& size) {
-    const auto right = std::min(size.width - 16.0F, 520.0F);
-    const auto bounds = D2D1::RectF(16.0F, kSearchTop, right, kSearchTop + kSearchHeight);
+    const auto right = std::min(size.width - kContentInset, 500.0F);
+    const auto bounds = D2D1::RectF(kContentInset, kSearchTop, right, kSearchTop + kSearchHeight);
     render_target_->FillRectangle(bounds, surface_brush_.Get());
     render_target_->DrawRectangle(bounds, search_active_ ? accent_brush_.Get() : line_brush_.Get(), search_active_ ? 2.0F : 1.0F);
     const auto* text = search_text_.empty() ? L"Search sensors or hardware..." : search_text_.c_str();
-    DrawTextLine(text, D2D1::RectF(30.0F, kSearchTop, right - 12.0F, kSearchTop + kSearchHeight), search_text_.empty() ? muted_brush_.Get() : text_brush_.Get(), body_format_.Get());
+    DrawTextLine(text, D2D1::RectF(kContentInset + 12.0F, kSearchTop, right - 10.0F, kSearchTop + kSearchHeight), search_text_.empty() ? muted_brush_.Get() : text_brush_.Get(), body_format_.Get());
 }
 
 void NativeWindow::DrawHeader(const D2D1_SIZE_F& size) {
@@ -552,13 +701,13 @@ void NativeWindow::DrawHeader(const D2D1_SIZE_F& size) {
     if (header_logo_bitmap_ != nullptr) {
         render_target_->DrawBitmap(
             header_logo_bitmap_.Get(),
-            D2D1::RectF(12.0F, 12.0F, 68.0F, 68.0F),
+            D2D1::RectF(10.0F, 10.0F, 58.0F, 58.0F),
             1.0F,
             D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
     }
 
-    DrawTextLine(L"HardwareScope", D2D1::RectF(78.0F, 10.0F, 330.0F, 54.0F), accent_brush_.Get(), title_format_.Get());
-    DrawTextLine(L"Sensors", D2D1::RectF(80.0F, 48.0F, 330.0F, 76.0F), muted_brush_.Get(), subtitle_format_.Get());
+    DrawTextLine(L"HardwareScope", D2D1::RectF(66.0F, 7.0F, 286.0F, 43.0F), accent_brush_.Get(), title_format_.Get());
+    DrawTextLine(L"Sensors", D2D1::RectF(68.0F, 38.0F, 286.0F, 62.0F), muted_brush_.Get(), subtitle_format_.Get());
 
     const auto controls_left = size.width - static_cast<float>(kWindowButtonWidth * kWindowButtonCount);
     render_target_->DrawLine(D2D1::Point2F(controls_left, 0.0F), D2D1::Point2F(controls_left, static_cast<float>(kHeaderHeight)), line_brush_.Get(), 1.0F);
@@ -601,17 +750,17 @@ void NativeWindow::DrawHeader(const D2D1_SIZE_F& size) {
 }
 
 void NativeWindow::DrawSensorTable(const D2D1_SIZE_F& size, const SensorSnapshot& snapshot) {
-    const auto table_width = std::max(0.0F, size.width - 32.0F);
+    const auto table_width = std::max(0.0F, size.width - kContentInset * 2.0F);
     if (sensor_layout_table_width_ == 0.0F) sensor_layout_table_width_ = table_width;
     else if (!in_size_move_.load(std::memory_order_acquire) && std::abs(sensor_layout_table_width_ - table_width) > 0.5F) {
         ClearTextLayoutCache();
         sensor_layout_table_width_ = table_width;
     }
-    const auto left = 16.0F;
+    const auto left = kContentInset;
     render_target_->FillRectangle(D2D1::RectF(left, kTableTop, left + table_width, kTableTop + kColumnHeaderHeight), line_brush_.Get());
 
     const std::array<const wchar_t*, 6> headers{L"OSD", L"Sensor", L"Current", L"Minimum", L"Maximum", L"Hardware"};
-    const std::array<float, 7> columns{left + 8.0F, left + 60.0F, left + table_width * 0.40F, left + table_width * 0.54F, left + table_width * 0.67F, left + table_width * 0.80F, left + table_width - 10.0F};
+    const auto columns = CalculateTableColumns(left, table_width);
     for (std::size_t index = 0; index < headers.size(); ++index) {
         DrawTextLine(headers[index], D2D1::RectF(columns[index], kTableTop, columns[index + 1], kTableTop + kColumnHeaderHeight), muted_brush_.Get(), value_format_.Get());
     }
@@ -627,12 +776,13 @@ void NativeWindow::DrawSensorTable(const D2D1_SIZE_F& size, const SensorSnapshot
 
     for (auto row_index = first; row_index < view.count && y < viewport_bottom; ++row_index, y += kSensorRowHeight) {
         const auto& row = view.rows[row_index];
+        auto* const section_brush = section_brushes_[static_cast<std::size_t>(row.section)].Get();
         if (row.is_section) {
             render_target_->FillRectangle(D2D1::RectF(left, y, left + table_width, std::min(y + kSensorRowHeight, viewport_bottom)), header_brush_.Get());
             const auto section_bit = 1U << static_cast<std::uint32_t>(row.section);
             const auto collapsed = (collapsed_sections_ & section_bit) != 0U && search_text_.empty();
-            DrawTextLine(collapsed ? L"›" : L"⌄", D2D1::RectF(left + 10.0F, y, left + 38.0F, y + kSensorRowHeight), accent_brush_.Get(), value_format_.Get());
-            DrawTextLine(SensorSectionName(row.section), D2D1::RectF(left + 42.0F, y, columns[2], y + kSensorRowHeight), accent_brush_.Get(), value_format_.Get());
+            DrawTextLine(collapsed ? L"›" : L"⌄", D2D1::RectF(left + 10.0F, y, left + 38.0F, y + kSensorRowHeight), section_brush, value_format_.Get());
+            DrawTextLine(SensorSectionName(row.section), D2D1::RectF(left + 42.0F, y, columns[2], y + kSensorRowHeight), section_brush, value_format_.Get());
             wchar_t count_text[32]{};
             if (row.section == SensorSection::cpu_temperatures && row.matching_sensor_count == 0U) {
                 static_cast<void>(wcscpy_s(count_text, L"waiting for reading"));
@@ -646,7 +796,7 @@ void NativeWindow::DrawSensorTable(const D2D1_SIZE_F& size, const SensorSnapshot
 
         if (row.is_placeholder) {
             render_target_->FillRectangle(D2D1::RectF(left, y, left + table_width, std::min(y + kSensorRowHeight, viewport_bottom)), surface_brush_.Get());
-            render_target_->FillRectangle(D2D1::RectF(left, y, left + 3.0F, std::min(y + kSensorRowHeight, viewport_bottom)), accent_brush_.Get());
+            render_target_->FillRectangle(D2D1::RectF(left, y, left + 3.0F, std::min(y + kSensorRowHeight, viewport_bottom)), section_brush);
             render_target_->DrawLine(D2D1::Point2F(left, y + kSensorRowHeight), D2D1::Point2F(left + table_width, y + kSensorRowHeight), line_brush_.Get(), 1.0F);
             DrawTextLine(L"CPU package temperature", D2D1::RectF(columns[1], y, columns[2], y + kSensorRowHeight), text_brush_.Get(), body_format_.Get());
             DrawTextLine(L"—", D2D1::RectF(columns[2], y, columns[3], y + kSensorRowHeight), muted_brush_.Get(), value_format_.Get());
@@ -662,15 +812,15 @@ void NativeWindow::DrawSensorTable(const D2D1_SIZE_F& size, const SensorSnapshot
 
         const auto row_brush = row_index % 2U == 0U ? surface_brush_.Get() : surface_alternate_brush_.Get();
         render_target_->FillRectangle(D2D1::RectF(left, y, left + table_width, std::min(y + kSensorRowHeight, viewport_bottom)), row_brush);
-        render_target_->FillRectangle(D2D1::RectF(left, y, left + 3.0F, std::min(y + kSensorRowHeight, viewport_bottom)), accent_brush_.Get());
+        render_target_->FillRectangle(D2D1::RectF(left, y, left + 3.0F, std::min(y + kSensorRowHeight, viewport_bottom)), section_brush);
         render_target_->DrawLine(D2D1::Point2F(left, y + kSensorRowHeight), D2D1::Point2F(left + table_width, y + kSensorRowHeight), line_brush_.Get(), 1.0F);
 
         const auto& sensor = snapshot.sensors[row.sensor_index];
-        const auto checkbox = D2D1::RectF(columns[0] + 11.0F, y + 9.0F, columns[0] + 27.0F, y + 25.0F);
-        render_target_->DrawRectangle(checkbox, IsSensorSelectedForOsd(sensor, settings_) ? accent_brush_.Get() : muted_brush_.Get(), 1.5F);
+        const auto checkbox = D2D1::RectF(columns[0] + 8.0F, y + 7.0F, columns[0] + 23.0F, y + 22.0F);
+        render_target_->DrawRectangle(checkbox, IsSensorSelectedForOsd(sensor, settings_) ? section_brush : muted_brush_.Get(), 1.5F);
         if (IsSensorSelectedForOsd(sensor, settings_)) {
-            render_target_->DrawLine(D2D1::Point2F(checkbox.left + 3.0F, checkbox.top + 8.0F), D2D1::Point2F(checkbox.left + 7.0F, checkbox.bottom - 3.0F), accent_brush_.Get(), 2.0F);
-            render_target_->DrawLine(D2D1::Point2F(checkbox.left + 7.0F, checkbox.bottom - 3.0F), D2D1::Point2F(checkbox.right - 3.0F, checkbox.top + 3.0F), accent_brush_.Get(), 2.0F);
+            render_target_->DrawLine(D2D1::Point2F(checkbox.left + 3.0F, checkbox.top + 8.0F), D2D1::Point2F(checkbox.left + 7.0F, checkbox.bottom - 3.0F), section_brush, 2.0F);
+            render_target_->DrawLine(D2D1::Point2F(checkbox.left + 7.0F, checkbox.bottom - 3.0F), D2D1::Point2F(checkbox.right - 3.0F, checkbox.top + 3.0F), section_brush, 2.0F);
         }
         wchar_t current[48]{};
         wchar_t minimum[48]{};
@@ -709,7 +859,7 @@ void NativeWindow::DrawSensorTable(const D2D1_SIZE_F& size, const SensorSnapshot
         const auto maximum_layout = ensure_layout(layouts.maximum_layout, layouts.maximum.data(), body_format_.Get(), columns[5] - columns[4]);
         const auto hardware_layout = ensure_layout(layouts.hardware_layout, sensor.hardware.data(), body_format_.Get(), columns[6] - columns[5]);
         if (name_layout != nullptr) render_target_->DrawTextLayout(D2D1::Point2F(columns[1], y), name_layout, text_brush_.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
-        if (current_layout != nullptr) render_target_->DrawTextLayout(D2D1::Point2F(columns[2], y), current_layout, accent_brush_.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
+        if (current_layout != nullptr) render_target_->DrawTextLayout(D2D1::Point2F(columns[2], y), current_layout, section_brush, D2D1_DRAW_TEXT_OPTIONS_CLIP);
         if (minimum_layout != nullptr) render_target_->DrawTextLayout(D2D1::Point2F(columns[3], y), minimum_layout, muted_brush_.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
         if (maximum_layout != nullptr) render_target_->DrawTextLayout(D2D1::Point2F(columns[4], y), maximum_layout, muted_brush_.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
         if (hardware_layout != nullptr) render_target_->DrawTextLayout(D2D1::Point2F(columns[5], y), hardware_layout, muted_brush_.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
@@ -790,8 +940,8 @@ void NativeWindow::HandleContentClick(const POINT client_point) {
     RECT client{};
     GetClientRect(window_, &client);
     const auto client_width = static_cast<float>(client.right) * scale;
-    const auto search_right = std::min(client_width - 16.0F, 520.0F);
-    if (x >= 16.0F && x <= search_right && y >= kSearchTop && y <= kSearchTop + kSearchHeight) {
+    const auto search_right = std::min(client_width - kContentInset, 500.0F);
+    if (x >= kContentInset && x <= search_right && y >= kSearchTop && y <= kSearchTop + kSearchHeight) {
         search_active_ = true;
         SetFocus(window_);
         InvalidateRect(window_, nullptr, FALSE);
@@ -811,13 +961,21 @@ void NativeWindow::HandleContentClick(const POINT client_point) {
             settings_.collapsed_sections = collapsed_sections_;
             static_cast<void>(settings_store_.Save(settings_));
             scroll_offset_ = 0.0F;
-        } else if (row_index < view.count && !view.rows[row_index].is_placeholder && x >= 16.0F && x <= 76.0F) {
+        } else if (row_index < view.count && !view.rows[row_index].is_placeholder) {
+            const auto table_width = std::max(0.0F, client_width - kContentInset * 2.0F);
+            const auto columns = CalculateTableColumns(kContentInset, table_width);
+            if (x < columns[0] || x > columns[1]) {
+                if (was_active) InvalidateRect(window_, nullptr, FALSE);
+                return;
+            }
             const auto& sensor = ui_snapshot_.sensors[view.rows[row_index].sensor_index];
             const auto selected = IsSensorSelectedForOsd(sensor, settings_);
             SetSensorSelectedForOsd(sensor, settings_, !selected);
             static_cast<void>(settings_store_.Save(settings_));
             osd_window_.ApplySettings(settings_);
+            fps_osd_window_.ApplySettings(settings_);
             osd_window_.Update(ui_snapshot_);
+            fps_osd_window_.Update(ui_snapshot_);
             if (sensor.kind == SensorKind::frame_rate) {
                 sensor_worker_.Stop();
                 sensor_worker_.ConfigureFps(
@@ -875,9 +1033,9 @@ void NativeWindow::UpdateHover(const POINT client_point) {
     HoverKind next_kind{HoverKind::none};
     TableColumn next_column{TableColumn::sensor};
     std::uint64_t next_sensor{};
-    const auto table_width = std::max(0.0F, width - 32.0F);
-    const auto left = 16.0F;
-    const std::array<float, 7> columns{left + 8.0F, left + 60.0F, left + table_width * 0.40F, left + table_width * 0.54F, left + table_width * 0.67F, left + table_width * 0.80F, left + table_width - 10.0F};
+    const auto table_width = std::max(0.0F, width - kContentInset * 2.0F);
+    const auto left = kContentInset;
+    const auto columns = CalculateTableColumns(left, table_width);
     if (next_window_button >= 0) {
         // Caption buttons never show sensor help.
     } else if (y >= kTableTop && y < kTableTop + kColumnHeaderHeight) {
@@ -975,6 +1133,16 @@ void NativeWindow::ShowTrayMenu() noexcept {
     const auto menu = CreatePopupMenu();
     if (menu == nullptr) return;
     static_cast<void>(AppendMenuW(menu, MF_STRING, kCommandOpen, L"Open HardwareScope"));
+    if (pending_update_) {
+        wchar_t update_text[96]{};
+        static_cast<void>(swprintf_s(
+            update_text,
+            L"Install update %u.%u.%uâ€¦",
+            pending_update_->manifest.version.major,
+            pending_update_->manifest.version.minor,
+            pending_update_->manifest.version.patch));
+        static_cast<void>(AppendMenuW(menu, MF_STRING, kCommandInstallUpdate, update_text));
+    }
     static_cast<void>(AppendMenuW(menu, MF_STRING | (settings_.show_osd ? MF_CHECKED : MF_UNCHECKED), kCommandToggleOsd, L"Show on-screen display"));
     static_cast<void>(AppendMenuW(menu, MF_STRING, kCommandSettings, L"Settings…"));
     static_cast<void>(AppendMenuW(menu, MF_SEPARATOR, 0U, nullptr));
@@ -990,10 +1158,12 @@ void NativeWindow::ShowTrayMenu() noexcept {
 
 void NativeWindow::HandleCommand(const int command) noexcept {
     if (command == kCommandOpen) RestoreFromTray();
+    else if (command == kCommandInstallUpdate) PromptForPendingUpdate();
     else if (command == kCommandSettings) ShowSettings();
     else if (command == kCommandToggleOsd) {
         settings_.show_osd = !settings_.show_osd;
         osd_window_.SetVisible(settings_.show_osd);
+        fps_osd_window_.SetVisible(settings_.show_osd);
         static_cast<void>(settings_store_.Save(settings_));
     } else if (command == kCommandExit) {
         static_cast<void>(PostMessageW(window_, WM_CLOSE, 0, 0));
@@ -1009,6 +1179,7 @@ void NativeWindow::ShowSettings() noexcept {
     static_cast<void>(settings_store_.Save(settings_));
     static_cast<void>(ApplyStartupRegistration(settings_.start_with_windows, settings_.start_minimized));
     osd_window_.ApplySettings(settings_);
+    fps_osd_window_.ApplySettings(settings_);
     sensor_worker_.Stop();
     sensor_worker_.ConfigureFps(
         settings_.fps_enabled,
@@ -1016,9 +1187,93 @@ void NativeWindow::ShowSettings() noexcept {
         settings_.fps_refresh_interval_ms,
         settings_.fps_smoothing_interval_ms);
     if (!suspended_) sensor_worker_.Start(std::chrono::milliseconds{settings_.refresh_interval_ms});
+    ScheduleAutomaticUpdateCheck();
     DiscardDeviceResources();
     ApplyDwmAppearance();
     InvalidateRect(window_, nullptr, FALSE);
+}
+
+void NativeWindow::ScheduleAutomaticUpdateCheck(const std::uint32_t default_delay_ms) noexcept {
+    KillTimer(window_, kStartupUpdateTimer);
+    if (!settings_.automatic_updates) return;
+    const auto now = CurrentUnixSeconds();
+    auto delay = static_cast<std::uint64_t>(default_delay_ms);
+    if (settings_.update_snooze_until_unix_seconds > now) {
+        const auto seconds = settings_.update_snooze_until_unix_seconds - now;
+        delay = std::clamp<std::uint64_t>(seconds * 1'000ULL, 1'000ULL, static_cast<std::uint64_t>(UINT_MAX));
+    }
+    static_cast<void>(SetTimer(window_, kStartupUpdateTimer, static_cast<UINT>(delay), nullptr));
+}
+
+bool NativeWindow::ShowUpdateNotification(const UpdateCompletion& completion) noexcept {
+    if (!AddTrayIcon()) return false;
+    NOTIFYICONDATAW icon{};
+    icon.cbSize = sizeof(icon);
+    icon.hWnd = window_;
+    icon.uID = 1U;
+    icon.uFlags = NIF_INFO | NIF_GUID;
+    icon.guidItem = kTrayIconGuid;
+    static_cast<void>(wcscpy_s(icon.szInfoTitle, L"HardwareScope update ready"));
+    static_cast<void>(swprintf_s(
+        icon.szInfo,
+        L"Version %u.%u.%u was verified. Click here to update or choose a reminder time.",
+        completion.manifest.version.major,
+        completion.manifest.version.minor,
+        completion.manifest.version.patch));
+    icon.dwInfoFlags = NIIF_INFO | NIIF_NOSOUND | NIIF_RESPECT_QUIET_TIME;
+    return Shell_NotifyIconW(NIM_MODIFY, &icon) != FALSE;
+}
+
+void NativeWindow::PromptForPendingUpdate() noexcept {
+    if (!pending_update_) return;
+    const auto completion = *pending_update_;
+    pending_update_.reset();
+    PromptForUpdate(completion);
+}
+
+void NativeWindow::PromptForUpdate(const UpdateCompletion& completion) noexcept {
+    const auto popup = GetLastActivePopup(window_);
+    const auto choice = ShowUpdatePrompt(popup, completion.manifest);
+    if (choice.action == UpdatePromptAction::remind_later) {
+        settings_.update_snooze_until_unix_seconds = CurrentUnixSeconds()
+            + static_cast<std::uint64_t>(choice.delay.count());
+        settings_.skipped_update_major = 0U;
+        settings_.skipped_update_minor = 0U;
+        settings_.skipped_update_patch = 0U;
+        static_cast<void>(settings_store_.Save(settings_));
+        ScheduleAutomaticUpdateCheck();
+        return;
+    }
+    if (choice.action == UpdatePromptAction::skip_version) {
+        settings_.update_snooze_until_unix_seconds = CurrentUnixSeconds() + 24ULL * 60ULL * 60ULL;
+        settings_.skipped_update_major = completion.manifest.version.major;
+        settings_.skipped_update_minor = completion.manifest.version.minor;
+        settings_.skipped_update_patch = completion.manifest.version.patch;
+        static_cast<void>(settings_store_.Save(settings_));
+        ScheduleAutomaticUpdateCheck();
+        return;
+    }
+    settings_.update_snooze_until_unix_seconds = 0U;
+    settings_.skipped_update_major = 0U;
+    settings_.skipped_update_minor = 0U;
+    settings_.skipped_update_patch = 0U;
+    static_cast<void>(settings_store_.Save(settings_));
+
+    std::array<wchar_t, 32'768U> module_path{};
+    const auto length = GetModuleFileNameW(nullptr, module_path.data(), static_cast<DWORD>(module_path.size()));
+    if (length == 0U || length >= module_path.size()) {
+        MessageBoxW(popup, L"The verified update could not be handed to Setup. Nothing was changed.", L"HardwareScope update", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    const std::filesystem::path application{module_path.data()};
+    auto updater = application.parent_path() / L"HardwareScopeUpdater.exe";
+    if (!std::filesystem::exists(updater)) updater = application.parent_path() / L"HardwareScopeNativeUpdater.exe";
+    if (!LaunchUpdateHandoff(updater, completion.installer, completion.manifest, GetCurrentProcessId(), application)) {
+        MessageBoxW(popup, L"The verified update could not be handed to Setup. Nothing was changed.", L"HardwareScope update", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    if (popup != nullptr && popup != window_) static_cast<void>(PostMessageW(popup, WM_CLOSE, 0U, 0));
+    static_cast<void>(PostMessageW(window_, WM_CLOSE, 0U, 0));
 }
 
 void NativeWindow::HandleUpdateCompletion(const UpdateCompletion& completion) noexcept {
@@ -1038,43 +1293,34 @@ void NativeWindow::HandleUpdateCompletion(const UpdateCompletion& completion) no
         return;
     }
     if (completion.status == UpdateCompletionStatus::current) {
+        if (completion.automatic) {
+            if (const auto skipped = SkippedUpdateVersion(settings_); skipped && SameVersion(*skipped, completion.manifest.version)) {
+                settings_.update_snooze_until_unix_seconds = CurrentUnixSeconds() + 24ULL * 60ULL * 60ULL;
+                static_cast<void>(settings_store_.Save(settings_));
+                ScheduleAutomaticUpdateCheck();
+            }
+        }
         if (!completion.automatic) MessageBoxW(popup, L"HardwareScope is already up to date.", L"HardwareScope update", MB_OK | MB_ICONINFORMATION);
         return;
     }
 
-    if (!completion.automatic) {
-        wchar_t prompt[320]{};
-        static_cast<void>(swprintf_s(
-            prompt,
-            L"HardwareScope %u.%u.%u was downloaded and verified. Install it now?",
-            completion.manifest.version.major,
-            completion.manifest.version.minor,
-            completion.manifest.version.patch));
-        if (MessageBoxW(popup, prompt, L"HardwareScope update", MB_YESNO | MB_ICONINFORMATION) != IDYES) return;
-    }
-
-    std::array<wchar_t, 32'768U> module_path{};
-    const auto length = GetModuleFileNameW(nullptr, module_path.data(), static_cast<DWORD>(module_path.size()));
-    if (length == 0U || length >= module_path.size()) {
-        MessageBoxW(popup, L"The verified update could not be handed to Setup. Nothing was changed.", L"HardwareScope update", MB_OK | MB_ICONWARNING);
+    if (completion.automatic) {
+        pending_update_ = completion;
+        settings_.update_snooze_until_unix_seconds = CurrentUnixSeconds() + 24ULL * 60ULL * 60ULL;
+        static_cast<void>(settings_store_.Save(settings_));
+        ScheduleAutomaticUpdateCheck();
+        static_cast<void>(ShowUpdateNotification(completion));
         return;
     }
-    const std::filesystem::path application{module_path.data()};
-    auto updater = application.parent_path() / L"HardwareScopeUpdater.exe";
-    if (!std::filesystem::exists(updater)) updater = application.parent_path() / L"HardwareScopeNativeUpdater.exe";
-    if (!LaunchUpdateHandoff(updater, completion.installer, completion.manifest, GetCurrentProcessId(), application)) {
-        MessageBoxW(popup, L"The verified update could not be handed to Setup. Nothing was changed.", L"HardwareScope update", MB_OK | MB_ICONWARNING);
-        return;
-    }
-    if (popup != nullptr && popup != window_) static_cast<void>(PostMessageW(popup, WM_CLOSE, 0U, 0));
-    static_cast<void>(PostMessageW(window_, WM_CLOSE, 0U, 0));
+    pending_update_.reset();
+    PromptForUpdate(completion);
 }
 
 void NativeWindow::ApplyDwmAppearance() noexcept {
     constexpr DWORD immersive_dark_mode_attribute = 20;
     constexpr DWORD corner_preference_attribute = 33;
     constexpr DWORD rounded_corner_preference = 2;
-    const BOOL dark = settings_.theme == Theme::dark ? TRUE : FALSE;
+    const BOOL dark = settings_.theme != Theme::light ? TRUE : FALSE;
     static_cast<void>(DwmSetWindowAttribute(window_, immersive_dark_mode_attribute, &dark, sizeof(dark)));
     static_cast<void>(DwmSetWindowAttribute(window_, corner_preference_attribute, &rounded_corner_preference, sizeof(rounded_corner_preference)));
 }

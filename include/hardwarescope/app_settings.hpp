@@ -10,6 +10,7 @@ namespace hardwarescope {
 enum class Theme : std::uint8_t {
     dark,
     light,
+    midnight,
 };
 
 enum class OsdPosition : std::uint8_t {
@@ -33,10 +34,19 @@ enum EasyTemperature : std::uint32_t {
 struct AppSettings final {
     static constexpr std::uint32_t kSchemaVersion = 2U;
     static constexpr std::size_t kMaximumPinnedSensors = 64U;
+    static constexpr std::uint32_t kMatchAccentColor = 0x01000000U;
 
     std::uint32_t refresh_interval_ms{750U};
     Theme theme{Theme::dark};
     std::uint32_t text_color_rgb{0x52E0D4U};
+    std::uint32_t cpu_temperature_color_rgb{kMatchAccentColor};
+    std::uint32_t cpu_usage_color_rgb{kMatchAccentColor};
+    std::uint32_t cpu_clock_color_rgb{kMatchAccentColor};
+    std::uint32_t cpu_power_color_rgb{kMatchAccentColor};
+    std::uint32_t graphics_color_rgb{kMatchAccentColor};
+    std::uint32_t storage_color_rgb{kMatchAccentColor};
+    std::uint32_t memory_color_rgb{kMatchAccentColor};
+    std::uint32_t system_color_rgb{kMatchAccentColor};
 
     bool start_with_windows{};
     bool start_minimized{};
@@ -56,12 +66,18 @@ struct AppSettings final {
 
     bool fps_enabled{true};
     bool fps_game_only{true};
+    bool fps_separate_position{};
+    OsdPosition fps_osd_position{OsdPosition::top_right};
     std::uint32_t fps_refresh_interval_ms{100U};
     std::uint32_t fps_smoothing_interval_ms{500U};
     std::uint32_t fps_color_rgb{0x52E0D4U};
     std::uint32_t fps_scale_percent{100U};
 
     bool automatic_updates{true};
+    std::uint64_t update_snooze_until_unix_seconds{};
+    std::uint32_t skipped_update_major{};
+    std::uint32_t skipped_update_minor{};
+    std::uint32_t skipped_update_patch{};
     std::uint32_t collapsed_sections{};
 
     std::array<std::uint64_t, kMaximumPinnedSensors> pinned_sensor_ids{};

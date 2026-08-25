@@ -1,5 +1,6 @@
 #pragma once
 
+#include "hardwarescope/app_settings.hpp"
 #include "hardwarescope/sensor_snapshot.hpp"
 
 #include <array>
@@ -37,6 +38,7 @@ struct SensorView final {
 
 [[nodiscard]] SensorSection ClassifySensor(const SensorValue& sensor) noexcept;
 [[nodiscard]] const wchar_t* SensorSectionName(SensorSection section) noexcept;
+[[nodiscard]] std::uint32_t SensorSectionColor(SensorSection section, const AppSettings& settings) noexcept;
 [[nodiscard]] SensorView BuildSensorView(
     const SensorSnapshot& snapshot,
     std::uint32_t collapsed_sections,

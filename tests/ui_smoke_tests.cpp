@@ -22,6 +22,39 @@ struct MonitorCollection final {
     std::size_t count{};
 };
 
+struct UpdatePromptControls final {
+    bool update_now{};
+    bool update_later{};
+    bool in_24_hours{};
+    bool in_3_days{};
+    bool in_1_week{};
+    bool skip_version{};
+};
+
+BOOL CALLBACK CollectUpdatePromptControls(const HWND child, const LPARAM context) noexcept {
+    auto& controls = *reinterpret_cast<UpdatePromptControls*>(context);
+    wchar_t text[96]{};
+    static_cast<void>(GetWindowTextW(child, text, static_cast<int>(std::size(text))));
+    if (wcscmp(text, L"Update now") == 0) controls.update_now = true;
+    else if (wcscmp(text, L"Remind me later") == 0) controls.update_later = true;
+    else if (wcscmp(text, L"In 24 hours") == 0) controls.in_24_hours = true;
+    else if (wcscmp(text, L"In 3 days") == 0) controls.in_3_days = true;
+    else if (wcscmp(text, L"In 1 week") == 0) controls.in_1_week = true;
+    else if (wcscmp(text, L"Never for this version") == 0) controls.skip_version = true;
+    return TRUE;
+}
+
+BOOL CALLBACK LogUpdatePromptControls(const HWND child, const LPARAM context) noexcept {
+    auto& stream = *reinterpret_cast<std::ostream*>(context);
+    wchar_t class_name[96]{};
+    wchar_t text[256]{};
+    static_cast<void>(GetClassNameW(child, class_name, static_cast<int>(std::size(class_name))));
+    static_cast<void>(GetWindowTextW(child, text, static_cast<int>(std::size(text))));
+    stream << "  child id=" << GetDlgCtrlID(child) << ", class=" << std::filesystem::path{class_name}.string()
+           << ", text=" << std::filesystem::path{text}.string() << '\n';
+    return TRUE;
+}
+
 BOOL CALLBACK CollectMonitor(const HMONITOR monitor, HDC, LPRECT, const LPARAM context) noexcept {
     auto& collection = *reinterpret_cast<MonitorCollection*>(context);
     if (collection.count >= collection.work_areas.size()) return TRUE;
@@ -102,6 +135,8 @@ int wmain(const int argument_count, wchar_t** arguments) {
             hardwarescope::kRestoreTrayIconTestMessage,
             hardwarescope::kQueryTrayIconAddedMessage,
             hardwarescope::kApplyMainDpiTestMessage,
+            hardwarescope::kShowUpdatePromptTestMessage,
+            hardwarescope::kQueueAutomaticUpdateNotificationTestMessage,
         };
         for (const auto message : hook_messages) {
             if (SendMessageW(window, message, 144U, 0U) != 0) {
@@ -145,11 +180,11 @@ int wmain(const int argument_count, wchar_t** arguments) {
         return 1;
     }
 
-    const auto start_x = before.left + 620;
+    const auto start_x = before.left + 300;
     const auto start_y = before.top + 42;
     const auto caption_result = SendMessageW(window, WM_NCHITTEST, 0, ScreenPointParameter(start_x, start_y));
     const auto controls_result = SendMessageW(window, WM_NCHITTEST, 0, ScreenPointParameter(before.right - 20, start_y));
-    const auto lower_controls_result = SendMessageW(window, WM_NCHITTEST, 0, ScreenPointParameter(before.right - 20, before.top + 76));
+    const auto lower_controls_result = SendMessageW(window, WM_NCHITTEST, 0, ScreenPointParameter(before.right - 20, before.top + 62));
     const auto content_result = SendMessageW(window, WM_NCHITTEST, 0, ScreenPointParameter(start_x, before.top + 200));
     if (caption_result != HTCAPTION || controls_result != HTCLIENT || lower_controls_result != HTCLIENT || content_result != HTCLIENT) {
         std::cerr << "FAIL: hit regions were caption=" << caption_result
@@ -243,6 +278,56 @@ int wmain(const int argument_count, wchar_t** arguments) {
         return 1;
     }
     std::cout << "OK: native one-second hover explanations show and clear without child controls\n";
+
+    if (SendMessageW(window, hardwarescope::kQueueAutomaticUpdateNotificationTestMessage, 0U, 0U) != 1) {
+        std::cerr << "FAIL: automatic update notification could not be queued through the tray\n";
+        return 1;
+    }
+    Sleep(150U);
+    if (FindWindowW(L"#32770", L"HardwareScope update") != nullptr) {
+        std::cerr << "FAIL: automatic update notification opened an intrusive modal dialog\n";
+        return 1;
+    }
+    std::cout << "OK: automatic updates use a quiet tray notification without stealing focus\n";
+
+    static_cast<void>(PostMessageW(window, hardwarescope::kShowUpdatePromptTestMessage, 0U, 0U));
+    HWND update_prompt{};
+    for (int attempt = 0; attempt < 100 && update_prompt == nullptr; ++attempt) {
+        Sleep(25U);
+        update_prompt = FindWindowW(L"#32770", L"HardwareScope update");
+    }
+    UpdatePromptControls update_controls{};
+    if (update_prompt != nullptr) {
+        static_cast<void>(EnumChildWindows(update_prompt, &CollectUpdatePromptControls, reinterpret_cast<LPARAM>(&update_controls)));
+    }
+    if (update_prompt == nullptr
+        || !update_controls.update_now
+        || !update_controls.update_later
+        || !update_controls.in_24_hours
+        || !update_controls.in_3_days
+        || !update_controls.in_1_week
+        || !update_controls.skip_version) {
+        std::cerr << "FAIL: update prompt is missing an install or reminder choice: now="
+                  << update_controls.update_now
+                  << ", later=" << update_controls.update_later
+                  << ", 24h=" << update_controls.in_24_hours
+                  << ", 3d=" << update_controls.in_3_days
+                  << ", 1w=" << update_controls.in_1_week
+                  << ", never=" << update_controls.skip_version << '\n';
+        if (update_prompt != nullptr) {
+            static_cast<void>(EnumChildWindows(update_prompt, &LogUpdatePromptControls, reinterpret_cast<LPARAM>(&std::cerr)));
+        }
+        return 1;
+    }
+    static_cast<void>(SendMessageW(update_prompt, TDM_CLICK_RADIO_BUTTON, hardwarescope::kUpdateIn1WeekRadio, 0U));
+    static_cast<void>(SendMessageW(update_prompt, TDM_CLICK_BUTTON, hardwarescope::kUpdateLaterButton, 0U));
+    for (int attempt = 0; attempt < 100 && IsWindow(update_prompt); ++attempt) Sleep(25U);
+    if (IsWindow(update_prompt)) {
+        std::cerr << "FAIL: update reminder choice did not close the prompt\n";
+        return 1;
+    }
+    std::cout << "OK: verified updates ask before installing and offer 24 hours, 3 days, 1 week, or never for that version\n";
+
     for (int paint = 0; paint < 160; ++paint) static_cast<void>(SendMessageW(window, WM_PAINT, 0U, 0));
     const auto paint_p95 = static_cast<unsigned long long>(SendMessageW(window, hardwarescope::kQueryPaintP95Message, 0U, 0));
     if (paint_p95 == 0U || paint_p95 > 4'000U) {
@@ -328,7 +413,7 @@ int wmain(const int argument_count, wchar_t** arguments) {
     const auto first_combo = FindWindowExW(settings, nullptr, WC_COMBOBOXW, nullptr);
     const auto sensor_list = FindWindowExW(settings, nullptr, L"LISTBOX", nullptr);
     const auto update_button = GetDlgItem(settings, hardwarescope::kSettingsCheckUpdatesCommand);
-    if (tabs == nullptr || first_combo == nullptr || sensor_list == nullptr || update_button == nullptr || TabCtrl_GetItemCount(tabs) != 3
+    if (tabs == nullptr || first_combo == nullptr || sensor_list == nullptr || update_button == nullptr || TabCtrl_GetItemCount(tabs) != 4
         || (GetWindowLongPtrW(settings, GWL_STYLE) & WS_CLIPCHILDREN) == 0
         || (GetWindowLongPtrW(tabs, GWL_STYLE) & TCS_OWNERDRAWFIXED) == 0
         || (GetWindowLongPtrW(first_combo, GWL_STYLE) & CBS_OWNERDRAWFIXED) == 0

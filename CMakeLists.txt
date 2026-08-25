@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.28)
 
-project(HardwareScopeNative VERSION 2.0.3 LANGUAGES CXX RC)
+project(HardwareScopeNative VERSION 2.0.4 LANGUAGES CXX RC)
 
 configure_file(installer/HardwareScope.iss.in HardwareScope.iss @ONLY)
 
@@ -64,6 +64,12 @@ set(HARDWARESCOPE_APP_SOURCES
 
 function(add_hardwarescope_app target_name internal_test_hooks)
     add_executable(${target_name} WIN32 ${HARDWARESCOPE_APP_SOURCES})
+    # Merge our DPI/UAC/Common-Controls declarations into the linker-generated
+    # embedded manifest. An RT_MANIFEST entry in the .rc file is overwritten by
+    # MSVC's default manifest step and therefore cannot carry these declarations.
+    target_link_options(${target_name} PRIVATE
+        "/MANIFESTINPUT:${CMAKE_CURRENT_SOURCE_DIR}/resources/app.manifest"
+    )
     target_link_libraries(${target_name} PRIVATE
         hardwarescope_core
         d2d1

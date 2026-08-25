@@ -145,8 +145,11 @@ void TestSettingsStore() {
     hardwarescope::SettingsStore store{path};
     hardwarescope::AppSettings settings{};
     settings.refresh_interval_ms = 50U;
-    settings.theme = hardwarescope::Theme::light;
+    settings.theme = hardwarescope::Theme::midnight;
     settings.text_color_rgb = 0x1ABCDEFU;
+    settings.cpu_temperature_color_rgb = 0x123456U;
+    settings.cpu_usage_color_rgb = hardwarescope::AppSettings::kMatchAccentColor;
+    settings.graphics_color_rgb = 0x1ABCDEFU;
     settings.start_with_windows = true;
     settings.start_minimized = true;
     settings.osd_position = hardwarescope::OsdPosition::bottom_right;
@@ -158,9 +161,15 @@ void TestSettingsStore() {
     settings.easy_temperature_mask = hardwarescope::easy_cpu_package | hardwarescope::easy_gpu_core;
     settings.fps_color_rgb = 0xFF7700U;
     settings.fps_scale_percent = 175U;
+    settings.fps_separate_position = true;
+    settings.fps_osd_position = hardwarescope::OsdPosition::top_right;
     settings.fps_refresh_interval_ms = 1U;
     settings.fps_smoothing_interval_ms = 9'999U;
     settings.automatic_updates = false;
+    settings.update_snooze_until_unix_seconds = 4'102'444'800ULL;
+    settings.skipped_update_major = 2U;
+    settings.skipped_update_minor = 1U;
+    settings.skipped_update_patch = 7U;
     settings.collapsed_sections = 0x15U;
     Expect(settings.PinSensor(10U), "first sensor can be pinned");
     Expect(settings.PinSensor(22U), "second sensor can be pinned");
@@ -174,8 +183,11 @@ void TestSettingsStore() {
     loaded.show_osd = false;
     Expect(store.Load(loaded), "saved settings load successfully");
     Expect(loaded.refresh_interval_ms == 100U, "refresh milliseconds clamp to safe minimum");
-    Expect(loaded.theme == hardwarescope::Theme::light, "theme round-trips");
+    Expect(loaded.theme == hardwarescope::Theme::midnight, "midnight theme round-trips");
     Expect(loaded.text_color_rgb == 0xABCDEFU, "text color is normalized to RGB");
+    Expect(loaded.cpu_temperature_color_rgb == 0x123456U, "CPU temperature color round-trips independently");
+    Expect(loaded.cpu_usage_color_rgb == hardwarescope::AppSettings::kMatchAccentColor, "category colors can continue matching the accent");
+    Expect(loaded.graphics_color_rgb == 0xABCDEFU, "category colors are normalized to RGB");
     Expect(loaded.start_with_windows && loaded.start_minimized, "startup settings round-trip");
     Expect(loaded.show_osd, "unmodified OSD setting retains its saved default");
     Expect(loaded.osd_position == hardwarescope::OsdPosition::bottom_right, "OSD position round-trips");
@@ -186,8 +198,14 @@ void TestSettingsStore() {
     Expect(loaded.osd_background, "OSD background preference round-trips");
     Expect(loaded.easy_temperature_mask == (hardwarescope::easy_cpu_package | hardwarescope::easy_gpu_core), "EZ Temp selection round-trips");
     Expect(loaded.fps_color_rgb == 0xFF7700U && loaded.fps_scale_percent == 175U, "independent FPS appearance round-trips");
+    Expect(loaded.fps_separate_position && loaded.fps_osd_position == hardwarescope::OsdPosition::top_right,
+        "independent FPS OSD corner round-trips");
     Expect(loaded.fps_refresh_interval_ms == 50U && loaded.fps_smoothing_interval_ms == 1'250U, "independent FPS timing settings clamp and round-trip");
     Expect(!loaded.automatic_updates, "update preference round-trips");
+    Expect(loaded.update_snooze_until_unix_seconds == 4'102'444'800ULL,
+        "update reminder time round-trips without precision loss");
+    Expect(loaded.skipped_update_major == 2U && loaded.skipped_update_minor == 1U && loaded.skipped_update_patch == 7U,
+        "skipped update version round-trips");
     Expect(loaded.collapsed_sections == 0x15U, "collapsed sensor sections round-trip");
     Expect(loaded.pinned_sensor_count == 2U && loaded.IsSensorPinned(10U) && loaded.IsSensorPinned(22U), "pinned sensor IDs round-trip");
     loaded.refresh_interval_ms = 333U;
@@ -238,6 +256,15 @@ void TestOsdModel() {
     Expect(items[1].group == hardwarescope::OsdHardwareGroup::cpu, "CPU temperature is grouped as CPU");
     Expect(items[2].group == hardwarescope::OsdHardwareGroup::gpu && items[3].group == hardwarescope::OsdHardwareGroup::gpu, "GPU temperatures share the GPU group");
     Expect(items[1].text.find(L"CPU Tctl/Tdie") == 0U, "CPU OSD label identifies the Tctl/Tdie reading");
+    settings.fps_separate_position = true;
+    settings.fps_osd_position = hardwarescope::OsdPosition::top_right;
+    const auto telemetry_surface = hardwarescope::BuildOsdSurfaceItems(snapshot, settings, false);
+    const auto fps_surface = hardwarescope::BuildOsdSurfaceItems(snapshot, settings, true);
+    Expect(telemetry_surface.size() == 3U && std::none_of(telemetry_surface.begin(), telemetry_surface.end(), [](const auto& item) { return item.fps; }),
+        "a split OSD keeps hardware telemetry on the primary surface");
+    Expect(fps_surface.size() == 1U && fps_surface.front().fps,
+        "a split OSD moves only FPS to its independent surface");
+    settings.fps_separate_position = false;
     Expect(hardwarescope::IsSensorSelectedForOsd(snapshot.sensors[0], settings), "EZ CPU temperature reports selected in the main OSD column");
     hardwarescope::SetSensorSelectedForOsd(snapshot.sensors[0], settings, false);
     Expect(!hardwarescope::IsSensorSelectedForOsd(snapshot.sensors[0], settings), "main OSD toggle can disable an EZ temperature");
@@ -436,11 +463,14 @@ void TestServiceBinaryPath() {
 void TestUiPalettes() {
     const auto dark = hardwarescope::PaletteFor(hardwarescope::Theme::dark, 0xFF5252U);
     const auto light = hardwarescope::PaletteFor(hardwarescope::Theme::light, 0xFFD93DU);
+    const auto midnight = hardwarescope::PaletteFor(hardwarescope::Theme::midnight, 0x52E0D4U);
     Expect(dark.background == 0x071016U && dark.text == 0xF3F8FAU, "dark palette keeps the entire app dark with readable text");
     Expect(dark.accent == 0xFF5252U, "dark palette honors the configured accent color");
     Expect(dark.selection != 0xFFFFFFU && dark.hover != 0xFFFFFFU, "dark palette never falls back to white selection or hover surfaces");
     Expect(light.background == 0xF4F7F9U && light.text == 0x17242DU, "light palette uses a readable light application surface");
     Expect(light.accent == 0xFFD93DU, "light palette honors the configured accent color");
+    Expect(midnight.background == 0x000000U && midnight.header == 0x030303U && midnight.text == 0xF7F9FAU,
+        "midnight palette uses pitch-black surfaces with readable text");
     Expect(hardwarescope::PaletteFor(hardwarescope::Theme::dark, 0xFF52E0D4U).accent == 0x52E0D4U, "palette strips non-RGB flag bits");
 }
 

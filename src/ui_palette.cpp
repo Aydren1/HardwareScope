@@ -39,6 +39,22 @@ UiPalette PaletteFor(const Theme theme, const std::uint32_t accent_rgb) noexcept
             .disabled = 0x8A9AA4U,
         };
     }
+    if (theme == Theme::midnight) {
+        return UiPalette{
+            .background = 0x000000U,
+            .header = 0x030303U,
+            .surface = 0x080808U,
+            .surface_alternate = 0x0D0D0DU,
+            .text = 0xF7F9FAU,
+            .muted = 0x9AA2A8U,
+            .accent = accent,
+            .line = 0x242424U,
+            .hover = 0x161616U,
+            .selection = Blend(accent, 0x080808U, 38U),
+            .selection_text = ContrastText(Blend(accent, 0x080808U, 62U)),
+            .disabled = 0x62686CU,
+        };
+    }
     return UiPalette{
         .background = 0x071016U,
         .header = 0x0B151DU,

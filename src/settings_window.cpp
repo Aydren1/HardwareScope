@@ -85,11 +85,14 @@ struct DialogState final {
     HWND easy_memory{};
     HWND fps_enabled{};
     HWND fps_game_only{};
+    HWND fps_separate_position{};
+    HWND fps_position{};
     HWND fps_refresh{};
     HWND fps_smoothing{};
     HWND fps_color{};
     HWND fps_scale{};
     HWND sensor_list{};
+    std::array<HWND, 8U> section_colors{};
 };
 
 int Scale(const DialogState& state, const int value) noexcept {
@@ -98,7 +101,7 @@ int Scale(const DialogState& state, const int value) noexcept {
 
 void StyleControl(const DialogState& state, const HWND control) noexcept {
     SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(state.font), TRUE);
-    static_cast<void>(SetWindowTheme(control, state.draft.theme == Theme::dark ? L"DarkMode_Explorer" : L"Explorer", nullptr));
+    static_cast<void>(SetWindowTheme(control, state.draft.theme != Theme::light ? L"DarkMode_Explorer" : L"Explorer", nullptr));
 }
 
 LRESULT CALLBACK CheckboxWindowProcedure(
@@ -339,6 +342,24 @@ std::uint32_t ComboValue(const HWND combo, const std::uint32_t fallback) noexcep
 
 bool Checked(const HWND control) noexcept { return SendMessageW(control, BM_GETCHECK, 0, 0) == BST_CHECKED; }
 
+std::vector<std::pair<const wchar_t*, std::uint32_t>> ColorChoices(const bool include_match_accent) {
+    std::vector<std::pair<const wchar_t*, std::uint32_t>> choices;
+    if (include_match_accent) choices.emplace_back(L"Match accent", AppSettings::kMatchAccentColor);
+    choices.insert(choices.end(), {
+        {L"Teal", 0x52E0D4U},
+        {L"Cyan", 0x20C7F2U},
+        {L"Blue", 0x4D8DFFU},
+        {L"Purple", 0xA970FFU},
+        {L"Pink", 0xFF5CA8U},
+        {L"Green", 0x5BE37DU},
+        {L"White", 0xFFFFFFU},
+        {L"Red", 0xFF5252U},
+        {L"Orange", 0xFF9F43U},
+        {L"Yellow", 0xFFD93DU},
+    });
+    return choices;
+}
+
 void DeleteDialogResources(DialogState& state) noexcept {
     if (state.font != nullptr) DeleteObject(std::exchange(state.font, nullptr));
     if (state.background_brush != nullptr) DeleteObject(std::exchange(state.background_brush, nullptr));
@@ -394,7 +415,7 @@ void RecreateFont(DialogState& state) noexcept {
 }
 
 void UpdateOwnerDrawMetrics(DialogState& state) noexcept {
-    if (state.tabs != nullptr) TabCtrl_SetItemSize(state.tabs, Scale(state, 200), Scale(state, 36));
+    if (state.tabs != nullptr) TabCtrl_SetItemSize(state.tabs, Scale(state, 150), Scale(state, 36));
     for (const auto& record : state.paged_controls) {
         std::array<wchar_t, 32U> class_name{};
         if (GetClassNameW(record.window, class_name.data(), static_cast<int>(class_name.size())) == 0) continue;
@@ -484,8 +505,8 @@ void HandleScroll(DialogState& state, const int bar, const WPARAM wparam, const 
 void BuildControls(DialogState& state) {
     state.tabs = AddControl(state, WC_TABCONTROLW, L"", TCS_OWNERDRAWFIXED | TCS_FIXEDWIDTH | WS_TABSTOP, 20, 18, 610, 38, kTabs, -1);
     if (state.tabs != nullptr) static_cast<void>(SetWindowSubclass(state.tabs, &TabWindowProcedure, 1U, reinterpret_cast<DWORD_PTR>(&state)));
-    TabCtrl_SetItemSize(state.tabs, Scale(state, 200), Scale(state, 36));
-    constexpr std::array<const wchar_t*, 3U> pages{L"General", L"On-screen display", L"Monitoring"};
+    TabCtrl_SetItemSize(state.tabs, Scale(state, 150), Scale(state, 36));
+    constexpr std::array<const wchar_t*, 4U> pages{L"General", L"On-screen display", L"Monitoring", L"Colors"};
     for (std::size_t index = 0U; index < pages.size(); ++index) {
         TCITEMW item{};
         item.mask = TCIF_TEXT;
@@ -494,9 +515,9 @@ void BuildControls(DialogState& state) {
     }
 
     Label(state, L"Application theme", 82, 0);
-    state.theme = Combo(state, 82, 0, {{L"Dark", 0U}, {L"Light", 1U}}, static_cast<std::uint32_t>(state.draft.theme));
+    state.theme = Combo(state, 82, 0, {{L"Dark", 0U}, {L"Light", 1U}, {L"Midnight", 2U}}, static_cast<std::uint32_t>(state.draft.theme));
     Label(state, L"Text and accent color", 122, 0);
-    state.color = Combo(state, 122, 0, {{L"Teal", 0x52E0D4U}, {L"White", 0xFFFFFFU}, {L"Red", 0xFF5252U}, {L"Orange", 0xFF9F43U}, {L"Yellow", 0xFFD93DU}}, state.draft.text_color_rgb);
+    state.color = Combo(state, 122, 0, ColorChoices(false), state.draft.text_color_rgb);
     Label(state, L"Hardware polling interval", 162, 0);
     state.refresh = Combo(state, 162, 0, {
         {L"100 ms (fastest)", 100U},
@@ -514,22 +535,25 @@ void BuildControls(DialogState& state) {
         {L"10000 ms (lightest)", 10'000U}}, state.draft.refresh_interval_ms);
     state.start_windows = Check(state, L"Start HardwareScope with Windows", state.draft.start_with_windows, 218, 0);
     state.start_minimized = Check(state, L"Start minimized to the notification tray", state.draft.start_minimized, 254, 0);
-    state.updates = Check(state, L"Automatically download and install stable updates", state.draft.automatic_updates, 306, 0);
+    state.updates = Check(state, L"Automatically check for stable updates", state.draft.automatic_updates, 306, 0);
     state.check_updates = PushButton(state, L"Check for updates", 42, 358, 180, 36, kSettingsCheckUpdatesCommand, 0);
 
     state.show_osd = Check(state, L"Show the on-screen display", state.draft.show_osd, 82, 1);
-    Label(state, L"Screen corner", 126, 1);
+    Label(state, L"Telemetry corner", 126, 1);
     state.position = Combo(state, 126, 1, {{L"Top left", 0U}, {L"Top right", 1U}, {L"Bottom left", 2U}, {L"Bottom right", 3U}}, static_cast<std::uint32_t>(state.draft.osd_position));
-    Label(state, L"Layout", 166, 1);
-    state.layout = Combo(state, 166, 1, {{L"Vertical", 0U}, {L"Horizontal", 1U}}, static_cast<std::uint32_t>(state.draft.osd_layout));
-    Label(state, L"Opacity", 206, 1);
-    state.opacity = Combo(state, 206, 1, {{L"25%", 25U}, {L"50%", 50U}, {L"75%", 75U}, {L"90%", 90U}, {L"100%", 100U}}, state.draft.osd_opacity_percent);
-    Label(state, L"Telemetry scale", 246, 1);
-    state.scale = Combo(state, 246, 1, {{L"50%", 50U}, {L"75%", 75U}, {L"100%", 100U}, {L"125%", 125U}, {L"150%", 150U}, {L"200%", 200U}, {L"250%", 250U}}, state.draft.osd_scale_percent);
-    Label(state, L"Item spacing", 286, 1);
-    state.spacing = Combo(state, 286, 1, {{L"Tight — 2 px", 2U}, {L"Compact — 5 px", 5U}, {L"Normal — 8 px", 8U}, {L"Roomy — 12 px", 12U}, {L"Wide — 20 px", 20U}}, state.draft.osd_spacing_px);
-    state.separators = Check(state, L"Separate CPU, GPU, memory, and FPS groups with |", state.draft.osd_group_separators, 342, 1);
-    state.background = Check(state, L"Draw a translucent background behind the OSD", state.draft.osd_background, 378, 1);
+    state.fps_separate_position = Check(state, L"Position the FPS counter separately", state.draft.fps_separate_position, 166, 1);
+    Label(state, L"FPS corner", 202, 1);
+    state.fps_position = Combo(state, 202, 1, {{L"Top left", 0U}, {L"Top right", 1U}, {L"Bottom left", 2U}, {L"Bottom right", 3U}}, static_cast<std::uint32_t>(state.draft.fps_osd_position));
+    Label(state, L"Telemetry layout", 242, 1);
+    state.layout = Combo(state, 242, 1, {{L"Vertical", 0U}, {L"Horizontal", 1U}}, static_cast<std::uint32_t>(state.draft.osd_layout));
+    Label(state, L"Opacity", 282, 1);
+    state.opacity = Combo(state, 282, 1, {{L"25%", 25U}, {L"50%", 50U}, {L"75%", 75U}, {L"90%", 90U}, {L"100%", 100U}}, state.draft.osd_opacity_percent);
+    Label(state, L"Telemetry scale", 322, 1);
+    state.scale = Combo(state, 322, 1, {{L"50%", 50U}, {L"75%", 75U}, {L"100%", 100U}, {L"125%", 125U}, {L"150%", 150U}, {L"200%", 200U}, {L"250%", 250U}}, state.draft.osd_scale_percent);
+    Label(state, L"Item spacing", 362, 1);
+    state.spacing = Combo(state, 362, 1, {{L"Tight — 2 px", 2U}, {L"Compact — 5 px", 5U}, {L"Normal — 8 px", 8U}, {L"Roomy — 12 px", 12U}, {L"Wide — 20 px", 20U}}, state.draft.osd_spacing_px);
+    state.separators = Check(state, L"Separate CPU, GPU, memory, and FPS groups with |", state.draft.osd_group_separators, 418, 1);
+    state.background = Check(state, L"Draw a translucent background behind the OSD", state.draft.osd_background, 454, 1);
 
     state.easy_enabled = Check(state, L"Enable EZ Temp selection", state.draft.easy_temperature_enabled, 78, 2);
     state.easy_cpu = Check(state, L"CPU Tctl/Tdie", (state.draft.easy_temperature_mask & easy_cpu_package) != 0U, 110, 2, 64, 170);
@@ -541,12 +565,10 @@ void BuildControls(DialogState& state) {
     state.fps_refresh = Combo(state, 272, 2, {{L"50 ms", 50U}, {L"100 ms", 100U}, {L"200 ms", 200U}, {L"250 ms", 250U}, {L"500 ms", 500U}}, state.draft.fps_refresh_interval_ms);
     Label(state, L"FPS smoothing", 312, 2);
     state.fps_smoothing = Combo(state, 312, 2, {{L"250 ms", 250U}, {L"500 ms", 500U}, {L"750 ms", 750U}, {L"1 second", 1'000U}, {L"1.25 seconds", 1'250U}}, state.draft.fps_smoothing_interval_ms);
-    Label(state, L"FPS color", 352, 2);
-    state.fps_color = Combo(state, 352, 2, {{L"Match telemetry", state.draft.text_color_rgb}, {L"Teal", 0x52E0D4U}, {L"White", 0xFFFFFFU}, {L"Red", 0xFF5252U}, {L"Orange", 0xFF9F43U}, {L"Yellow", 0xFFD93DU}}, state.draft.fps_color_rgb);
-    Label(state, L"FPS scale", 392, 2);
-    state.fps_scale = Combo(state, 392, 2, {{L"50%", 50U}, {L"75%", 75U}, {L"100%", 100U}, {L"125%", 125U}, {L"150%", 150U}, {L"200%", 200U}, {L"250%", 250U}, {L"300%", 300U}}, state.draft.fps_scale_percent);
-    Label(state, L"Additional OSD sensors", 434, 2, 42, 220);
-    state.sensor_list = AddControl(state, L"LISTBOX", L"", LBS_EXTENDEDSEL | LBS_NOINTEGRALHEIGHT | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS | WS_BORDER | WS_VSCROLL | WS_TABSTOP, 270, 430, 350, 128, 0, 2);
+    Label(state, L"FPS scale", 352, 2);
+    state.fps_scale = Combo(state, 352, 2, {{L"50%", 50U}, {L"75%", 75U}, {L"100%", 100U}, {L"125%", 125U}, {L"150%", 150U}, {L"200%", 200U}, {L"250%", 250U}, {L"300%", 300U}}, state.draft.fps_scale_percent);
+    Label(state, L"Additional OSD sensors", 394, 2, 42, 220);
+    state.sensor_list = AddControl(state, L"LISTBOX", L"", LBS_EXTENDEDSEL | LBS_NOINTEGRALHEIGHT | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS | WS_BORDER | WS_VSCROLL | WS_TABSTOP, 270, 390, 350, 168, 0, 2);
     SendMessageW(state.sensor_list, LB_SETITEMHEIGHT, 0U, Scale(state, 28));
     for (std::uint32_t index = 0U; state.snapshot != nullptr && index < state.snapshot->count; ++index) {
         const auto& sensor = state.snapshot->sensors[index];
@@ -557,6 +579,23 @@ void BuildControls(DialogState& state) {
         SendMessageW(state.sensor_list, LB_SETITEMDATA, static_cast<WPARAM>(item), static_cast<LPARAM>(index));
         if (state.draft.IsSensorPinned(sensor.id)) SendMessageW(state.sensor_list, LB_SETSEL, TRUE, item);
     }
+
+    const auto category_choices = ColorChoices(true);
+    constexpr std::array<const wchar_t*, 8U> category_labels{
+        L"CPU temperatures", L"CPU usage", L"CPU clock speeds", L"CPU power & voltage",
+        L"Graphics", L"Storage & drives", L"Memory", L"System & other"};
+    const std::array<std::uint32_t, 8U> category_values{
+        state.draft.cpu_temperature_color_rgb, state.draft.cpu_usage_color_rgb,
+        state.draft.cpu_clock_color_rgb, state.draft.cpu_power_color_rgb,
+        state.draft.graphics_color_rgb, state.draft.storage_color_rgb,
+        state.draft.memory_color_rgb, state.draft.system_color_rgb};
+    for (std::size_t index = 0U; index < category_labels.size(); ++index) {
+        const auto y = 82 + static_cast<int>(index) * 40;
+        Label(state, category_labels[index], y, 3);
+        state.section_colors[index] = Combo(state, y, 3, category_choices, category_values[index]);
+    }
+    Label(state, L"FPS", 402, 3);
+    state.fps_color = Combo(state, 402, 3, category_choices, state.draft.fps_color_rgb);
 
     PushButton(state, L"Cancel", 408, 605, 100, 38, kCancel, -1);
     PushButton(state, L"Save settings", 518, 605, 120, 38, kSave, -1);
@@ -584,10 +623,20 @@ void ReadControls(DialogState& state) noexcept {
         | (Checked(state.easy_memory) ? easy_gpu_memory_junction : 0U);
     state.draft.fps_enabled = Checked(state.fps_enabled);
     state.draft.fps_game_only = Checked(state.fps_game_only);
+    state.draft.fps_separate_position = Checked(state.fps_separate_position);
+    state.draft.fps_osd_position = static_cast<OsdPosition>(ComboValue(state.fps_position, 1U));
     state.draft.fps_refresh_interval_ms = ComboValue(state.fps_refresh, state.draft.fps_refresh_interval_ms);
     state.draft.fps_smoothing_interval_ms = ComboValue(state.fps_smoothing, state.draft.fps_smoothing_interval_ms);
     state.draft.fps_color_rgb = ComboValue(state.fps_color, state.draft.fps_color_rgb);
     state.draft.fps_scale_percent = ComboValue(state.fps_scale, state.draft.fps_scale_percent);
+    state.draft.cpu_temperature_color_rgb = ComboValue(state.section_colors[0], state.draft.cpu_temperature_color_rgb);
+    state.draft.cpu_usage_color_rgb = ComboValue(state.section_colors[1], state.draft.cpu_usage_color_rgb);
+    state.draft.cpu_clock_color_rgb = ComboValue(state.section_colors[2], state.draft.cpu_clock_color_rgb);
+    state.draft.cpu_power_color_rgb = ComboValue(state.section_colors[3], state.draft.cpu_power_color_rgb);
+    state.draft.graphics_color_rgb = ComboValue(state.section_colors[4], state.draft.graphics_color_rgb);
+    state.draft.storage_color_rgb = ComboValue(state.section_colors[5], state.draft.storage_color_rgb);
+    state.draft.memory_color_rgb = ComboValue(state.section_colors[6], state.draft.memory_color_rgb);
+    state.draft.system_color_rgb = ComboValue(state.section_colors[7], state.draft.system_color_rgb);
     state.draft.pinned_sensor_ids = {};
     state.draft.pinned_sensor_count = 0U;
     const auto count = static_cast<int>(SendMessageW(state.sensor_list, LB_GETCOUNT, 0, 0));
@@ -700,9 +749,9 @@ void PreviewPalette(DialogState& state) noexcept {
     state.palette = PaletteFor(state.draft.theme, state.draft.text_color_rgb);
     RecreateBrushes(state);
     for (const auto& record : state.paged_controls) StyleControl(state, record.window);
-    const BOOL dark = state.draft.theme == Theme::dark ? TRUE : FALSE;
+    const BOOL dark = state.draft.theme != Theme::light ? TRUE : FALSE;
     static_cast<void>(DwmSetWindowAttribute(state.window, 20U, &dark, sizeof(dark)));
-    static_cast<void>(SetWindowTheme(state.window, state.draft.theme == Theme::dark ? L"DarkMode_Explorer" : L"Explorer", nullptr));
+    static_cast<void>(SetWindowTheme(state.window, state.draft.theme != Theme::light ? L"DarkMode_Explorer" : L"Explorer", nullptr));
     RedrawWindow(state.window, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_FRAME);
 }
 
@@ -915,9 +964,9 @@ bool ShowSettingsWindow(const HWND owner, AppSettings& settings, const SensorSna
     }
     static_cast<void>(SendMessageW(state.window, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(window_class.hIcon)));
     static_cast<void>(SendMessageW(state.window, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(window_class.hIconSm)));
-    const BOOL dark = state.draft.theme == Theme::dark ? TRUE : FALSE;
+    const BOOL dark = state.draft.theme != Theme::light ? TRUE : FALSE;
     static_cast<void>(DwmSetWindowAttribute(state.window, 20U, &dark, sizeof(dark)));
-    static_cast<void>(SetWindowTheme(state.window, state.draft.theme == Theme::dark ? L"DarkMode_Explorer" : L"Explorer", nullptr));
+    static_cast<void>(SetWindowTheme(state.window, state.draft.theme != Theme::light ? L"DarkMode_Explorer" : L"Explorer", nullptr));
     BuildControls(state);
     Relayout(state);
     EnableWindow(owner, FALSE);

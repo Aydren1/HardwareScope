@@ -29,6 +29,10 @@ struct OsdDisplayItem final {
 [[nodiscard]] std::vector<OsdDisplayItem> BuildOsdDisplayItems(
     const SensorSnapshot& snapshot,
     const AppSettings& settings);
+[[nodiscard]] std::vector<OsdDisplayItem> BuildOsdSurfaceItems(
+    const SensorSnapshot& snapshot,
+    const AppSettings& settings,
+    bool fps_surface);
 
 [[nodiscard]] bool IsSensorSelectedForOsd(const SensorValue& sensor, const AppSettings& settings) noexcept;
 void SetSensorSelectedForOsd(const SensorValue& sensor, AppSettings& settings, bool selected) noexcept;

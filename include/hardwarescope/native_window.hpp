@@ -19,6 +19,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 
 namespace hardwarescope {
@@ -41,8 +42,8 @@ private:
     static constexpr UINT kTrayMessage = WM_APP + 18U;
     static constexpr UINT_PTR kStartupUpdateTimer = 2U;
     static constexpr UINT_PTR kTooltipTimer = 3U;
-    static constexpr int kHeaderHeight = 86;
-    static constexpr int kWindowButtonWidth = 46;
+    static constexpr int kHeaderHeight = 70;
+    static constexpr int kWindowButtonWidth = 40;
     static constexpr int kWindowButtonCount = 4;
 
     static LRESULT CALLBACK StaticWindowProcedure(HWND window, UINT message, WPARAM wparam, LPARAM lparam) noexcept;
@@ -77,6 +78,10 @@ private:
     void ShowTrayMenu() noexcept;
     void HandleCommand(int command) noexcept;
     void ShowSettings() noexcept;
+    void ScheduleAutomaticUpdateCheck(std::uint32_t default_delay_ms = 5'000U) noexcept;
+    bool ShowUpdateNotification(const UpdateCompletion& completion) noexcept;
+    void PromptForUpdate(const UpdateCompletion& completion) noexcept;
+    void PromptForPendingUpdate() noexcept;
     void HandleUpdateCompletion(const UpdateCompletion& completion) noexcept;
     [[nodiscard]] std::uint64_t PaintP95Microseconds() const noexcept;
 
@@ -104,6 +109,7 @@ private:
     bool tray_icon_added_{};
     bool suspended_{};
     bool resume_waiting_for_snapshot_{};
+    std::optional<UpdateCompletion> pending_update_{};
     SnapshotStore snapshots_{};
     SensorSnapshot ui_snapshot_{};
     SensorWorker sensor_worker_;
@@ -111,6 +117,7 @@ private:
     UiPalette palette_{};
     SettingsStore settings_store_;
     OsdWindow osd_window_;
+    OsdWindow fps_osd_window_;
 
     Microsoft::WRL::ComPtr<ID2D1Factory> d2d_factory_{};
     Microsoft::WRL::ComPtr<IDWriteFactory> dwrite_factory_{};
@@ -120,6 +127,7 @@ private:
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> text_brush_{};
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> muted_brush_{};
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> accent_brush_{};
+    std::array<Microsoft::WRL::ComPtr<ID2D1SolidColorBrush>, static_cast<std::size_t>(SensorSection::count)> section_brushes_{};
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> line_brush_{};
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> header_brush_{};
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> surface_brush_{};
