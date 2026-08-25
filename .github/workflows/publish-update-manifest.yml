@@ -3,6 +3,9 @@ name: Publish verified update manifest
 on:
   release:
     types: [published]
+  workflow_run:
+    workflows: ["Build and publish release"]
+    types: [completed]
 
 permissions:
   contents: write
@@ -13,7 +16,11 @@ concurrency:
 
 jobs:
   publish-manifest:
-    if: ${{ !github.event.release.draft && !github.event.release.prerelease }}
+    if: >-
+      ${{
+        (github.event_name == 'release' && !github.event.release.draft && !github.event.release.prerelease) ||
+        (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+      }}
     runs-on: ubuntu-latest
     steps:
       - name: Check out main
@@ -21,10 +28,25 @@ jobs:
         with:
           ref: main
 
+      - name: Resolve the public stable release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${EVENT_TAG:-}" ]]; then
+            TAG="$EVENT_TAG"
+          else
+            TAG="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)"
+          fi
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
       - name: Download and verify published release assets
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event.release.tag_name }}
+          TAG: ${{ steps.release.outputs.tag }}
         run: |
           set -euo pipefail
           VERSION="${TAG#v}"
@@ -58,7 +80,7 @@ jobs:
             "  \"installer\": \"$INSTALLER_URL\"," \
             "  \"sha256\": \"$ACTUAL_HASH\"," \
             "  \"size\": $SIZE," \
-            "  \"releaseNotes\": \"${{ github.event.release.html_url }}\"" \
+            "  \"releaseNotes\": \"https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}\"" \
             '}' > updates/latest.json
 
       - name: Commit verified manifest
@@ -71,5 +93,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add updates/latest.json
-          git commit -m "Publish verified update manifest for ${{ github.event.release.tag_name }}"
+          git commit -m "Publish verified update manifest for ${{ steps.release.outputs.tag }}"
           git push origin HEAD:main
