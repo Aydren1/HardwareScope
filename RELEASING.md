@@ -19,5 +19,22 @@ the release assets.
 Never point `updates/latest.json` at a draft, local file, or asset that has not
 been downloaded and verified from the public GitHub release.
 
+## Signing gate
+
+The current pipeline publishes unsigned releases until HardwareScope has been
+accepted by SignPath Foundation and the repository has been connected to its
+SignPath project. Do not add placeholder IDs or tokens to `release.yml`.
+
+After acceptance, the release pipeline must submit only GitHub-hosted workflow
+artifacts built from the release tag. Signing requests require manual approval.
+The HardwareScope application, updater, sensor service, and final installer are
+eligible project artifacts. The upstream `PresentMon.exe` binary must remain
+outside HardwareScope's signing scope.
+
+After signing is enabled, verify each published executable with
+`Get-AuthenticodeSignature` and fail the release if any expected signature is
+missing or invalid. Update the signing-status wording in `README.md` only after
+that enforcement is active.
+
 If either workflow fails, leave the previous stable manifest unchanged, correct
 the source or automation, and rerun the failed workflow.

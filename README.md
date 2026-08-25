@@ -21,6 +21,16 @@ HardwareScope is currently unsigned. Windows may show an **Unknown publisher**
 or SmartScreen warning. Every release includes `SHA256SUMS.txt` so the installer
 can be verified before it is opened.
 
+## Code signing policy
+
+HardwareScope is preparing to use sponsored open-source signing. Free code
+signing provided by [SignPath.io](https://signpath.io/), certificate by
+[SignPath Foundation](https://signpath.org/). Until Windows shows a valid
+SignPath Foundation signature for a release, that release remains unsigned.
+
+See the complete [code signing policy](CODE_SIGNING_POLICY.md), including team
+roles and release controls, and the [privacy policy](PRIVACY.md).
+
 ## Highlights
 
 - CPU, GPU, storage, memory, motherboard, fan, power, voltage, usage, and clock
@@ -81,7 +91,8 @@ the packaged application.
 - `third_party/` — pinned runtime dependencies included with attribution
 
 See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for dependency and license
-details, and [RELEASING.md](RELEASING.md) for the verified release process.
+details, [PRIVACY.md](PRIVACY.md) for network behavior, and
+[RELEASING.md](RELEASING.md) for the verified release process.
 
 ## License
 

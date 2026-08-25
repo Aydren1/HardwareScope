@@ -19,8 +19,17 @@ PrivilegesRequired=admin
 #endif
 AppName=HardwareScope
 AppVersion={#AppVersion}
-AppPublisher=HardwareScope
+AppPublisher=HardwareScope Project
 AppPublisherURL=https://github.com/Aydren1/HardwareScope
+AppSupportURL=https://github.com/Aydren1/HardwareScope/issues
+AppUpdatesURL=https://github.com/Aydren1/HardwareScope/releases/latest
+AppCopyright=Copyright (c) 2026 Aydren1 and HardwareScope contributors
+VersionInfoCompany=HardwareScope Project
+VersionInfoCopyright=Copyright (c) 2026 Aydren1 and HardwareScope contributors
+VersionInfoDescription=HardwareScope installer
+VersionInfoProductName=HardwareScope
+VersionInfoProductVersion={#AppVersion}
+VersionInfoVersion={#AppVersion}.0
 DefaultDirName={autopf}\HardwareScope
 DefaultGroupName=HardwareScope
 DisableProgramGroupPage=yes
@@ -43,6 +52,8 @@ Source: "{#BuildDirectory}/HardwareScopeNativeSensorService.exe"; DestDir: "{app
 Source: "@CMAKE_CURRENT_SOURCE_DIR@/third_party/presentmon/PresentMon-2.4.1-x64.exe"; DestDir: "{app}"; DestName: "PresentMon.exe"; Flags: ignoreversion
 Source: "@CMAKE_CURRENT_SOURCE_DIR@/LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "@CMAKE_CURRENT_SOURCE_DIR@/THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "@CMAKE_CURRENT_SOURCE_DIR@/PRIVACY.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "@CMAKE_CURRENT_SOURCE_DIR@/CODE_SIGNING_POLICY.md"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 #ifdef SmokeTest

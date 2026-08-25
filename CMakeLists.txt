@@ -3,6 +3,8 @@ cmake_minimum_required(VERSION 3.28)
 project(HardwareScopeNative VERSION 2.0.4 LANGUAGES CXX RC)
 
 configure_file(installer/HardwareScope.iss.in HardwareScope.iss @ONLY)
+configure_file(resources/HardwareScopeVersion.rc.in HardwareScopeVersion.rc @ONLY)
+set(HARDWARESCOPE_VERSION_RESOURCE "${CMAKE_CURRENT_BINARY_DIR}/HardwareScopeVersion.rc")
 
 option(HARDWARESCOPE_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" ON)
 
@@ -60,6 +62,7 @@ set(HARDWARESCOPE_APP_SOURCES
     src/osd_window.cpp
     src/settings_window.cpp
     resources/HardwareScope.rc
+    ${HARDWARESCOPE_VERSION_RESOURCE}
 )
 
 function(add_hardwarescope_app target_name internal_test_hooks)
@@ -129,6 +132,7 @@ target_link_libraries(HardwareScopeNativeGpuProbe PRIVATE hardwarescope_core)
 add_executable(HardwareScopeNativeSensorService
     src/sensor_service_main.cpp
     resources/SensorService.rc
+    ${HARDWARESCOPE_VERSION_RESOURCE}
 )
 target_link_libraries(HardwareScopeNativeSensorService PRIVATE hardwarescope_core advapi32)
 add_custom_command(TARGET HardwareScopeNativeSensorService POST_BUILD
@@ -139,6 +143,7 @@ add_custom_command(TARGET HardwareScopeNativeSensorService POST_BUILD
 add_executable(HardwareScopeNativeUpdater WIN32
     src/updater_main.cpp
     resources/Updater.rc
+    ${HARDWARESCOPE_VERSION_RESOURCE}
 )
 target_link_libraries(HardwareScopeNativeUpdater PRIVATE hardwarescope_core shell32)
 
@@ -235,7 +240,7 @@ install(PROGRAMS $<TARGET_FILE:HardwareScopeNative> DESTINATION . RENAME Hardwar
 install(PROGRAMS $<TARGET_FILE:HardwareScopeNativeUpdater> DESTINATION . RENAME HardwareScopeUpdater.exe)
 install(PROGRAMS $<TARGET_FILE:HardwareScopeNativeSensorService> DESTINATION . RENAME HardwareScopeSensorService.exe)
 install(PROGRAMS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/presentmon/PresentMon-2.4.1-x64.exe" DESTINATION . RENAME PresentMon.exe)
-install(FILES LICENSE.txt THIRD_PARTY_NOTICES.md README.md DESTINATION .)
+install(FILES LICENSE.txt THIRD_PARTY_NOTICES.md PRIVACY.md CODE_SIGNING_POLICY.md README.md DESTINATION .)
 
 set(CPACK_GENERATOR ZIP)
 set(CPACK_PACKAGE_NAME HardwareScope)

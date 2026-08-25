@@ -86,6 +86,23 @@ jobs:
 
           $installer = Get-Item -LiteralPath "out/packages/HardwareScope-Setup-$version-x64.exe"
           $portable = Get-Item -LiteralPath "out/packages/HardwareScope-$version-x64.zip"
+
+          $metadataFiles = @(
+            'out/build/x64-release/Release/HardwareScopeNative.exe',
+            'out/build/x64-release/Release/HardwareScopeNativeUpdater.exe',
+            'out/build/x64-release/Release/HardwareScopeNativeSensorService.exe',
+            $installer.FullName
+          )
+          foreach ($metadataFile in $metadataFiles) {
+            $metadata = (Get-Item -LiteralPath $metadataFile).VersionInfo
+            if ($metadata.ProductName -ne 'HardwareScope') {
+              throw "Unexpected product name in ${metadataFile}: $($metadata.ProductName)"
+            }
+            if ($metadata.ProductVersion -ne $version) {
+              throw "Unexpected product version in ${metadataFile}: $($metadata.ProductVersion)"
+            }
+          }
+
           $lines = foreach ($file in @($installer, $portable)) {
             $hash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
             "$hash  $($file.Name)"
