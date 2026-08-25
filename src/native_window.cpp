@@ -163,7 +163,7 @@ bool NativeWindow::CreateNativeWindow(const int show_command) {
     static_cast<void>(AddTrayIcon());
     if (!osd_window_.Initialize(window_, settings_)) return false;
     if (settings_.automatic_updates) static_cast<void>(SetTimer(window_, kStartupUpdateTimer, 5'000U, nullptr));
-    if (settings_.start_minimized && settings_.minimize_to_tray) {
+    if (settings_.start_minimized) {
         ShowWindow(window_, SW_HIDE);
     } else {
         ShowWindow(window_, show_command == 0 ? SW_SHOWNORMAL : show_command);
@@ -253,7 +253,7 @@ LRESULT NativeWindow::WindowProcedure(const UINT message, const WPARAM wparam, c
         }
         break;
     case WM_SYSCOMMAND:
-        if ((wparam & 0xFFF0U) == SC_MINIMIZE && settings_.minimize_to_tray) {
+        if ((wparam & 0xFFF0U) == SC_MINIMIZE) {
             MinimizeToTray();
             return 0;
         }
@@ -777,8 +777,7 @@ void NativeWindow::HandleWindowButton(const POINT client_point) {
         ShowSettings();
     }
     else if (index == 1) {
-        if (settings_.minimize_to_tray) MinimizeToTray();
-        else ShowWindow(window_, SW_MINIMIZE);
+        MinimizeToTray();
     }
     else if (index == 2) ShowWindow(window_, IsZoomed(window_) ? SW_RESTORE : SW_MAXIMIZE);
     else if (index == 3) PostMessageW(window_, WM_CLOSE, 0, 0);

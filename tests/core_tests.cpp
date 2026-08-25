@@ -190,6 +190,11 @@ void TestSettingsStore() {
     Expect(!loaded.automatic_updates, "update preference round-trips");
     Expect(loaded.collapsed_sections == 0x15U, "collapsed sensor sections round-trip");
     Expect(loaded.pinned_sensor_count == 2U && loaded.IsSensorPinned(10U) && loaded.IsSensorPinned(22U), "pinned sensor IDs round-trip");
+    loaded.refresh_interval_ms = 333U;
+    Expect(store.Save(loaded), "a changed millisecond polling interval saves successfully");
+    hardwarescope::AppSettings changed_polling{};
+    Expect(store.Load(changed_polling) && changed_polling.refresh_interval_ms == 333U,
+        "a changed millisecond polling interval persists exactly");
     auto temporary = path;
     temporary += L".tmp";
     Expect(!fs::exists(temporary), "atomic save leaves no temporary settings file");
@@ -537,7 +542,7 @@ void TestLegacySettingsMigration() {
     Expect(migrated.fps_color_rgb == 0xFFD93DU && migrated.fps_scale_percent == 200U && migrated.fps_refresh_interval_ms == 50U && migrated.fps_smoothing_interval_ms == 750U, "legacy independent FPS controls migrate");
     const auto cpu_usage_bit = 1U << static_cast<std::uint32_t>(hardwarescope::SensorSection::cpu_usage);
     Expect((migrated.collapsed_sections & cpu_usage_bit) != 0U, "legacy collapsed sensor sections migrate");
-    Expect(migrated.start_with_windows && migrated.start_minimized && migrated.minimize_to_tray && !migrated.automatic_updates, "legacy startup and update preferences migrate");
+    Expect(migrated.start_with_windows && migrated.start_minimized && !migrated.automatic_updates, "legacy startup and update preferences migrate");
     Expect(!hardwarescope::MigrateLegacySettingsJson("{}", migrated), "unrecognized JSON is never mistaken for HardwareScope settings");
 }
 

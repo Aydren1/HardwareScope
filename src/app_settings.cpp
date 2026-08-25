@@ -160,8 +160,6 @@ bool SettingsStore::Load(AppSettings& destination) const noexcept {
         loaded.text_color_rgb = IntegerValue(values, "text_color_rgb", loaded.text_color_rgb, 16);
         loaded.start_with_windows = BooleanValue(values, "start_with_windows", loaded.start_with_windows);
         loaded.start_minimized = BooleanValue(values, "start_minimized", loaded.start_minimized);
-        loaded.minimize_to_tray = BooleanValue(values, "minimize_to_tray", loaded.minimize_to_tray);
-        loaded.hide_taskbar_when_minimized = BooleanValue(values, "hide_taskbar_when_minimized", loaded.hide_taskbar_when_minimized);
         loaded.show_osd = BooleanValue(values, "show_osd", loaded.show_osd);
         loaded.osd_position = EnumValue(values, "osd_position", loaded.osd_position, 3U);
         loaded.osd_layout = EnumValue(values, "osd_layout", loaded.osd_layout, 1U);
@@ -207,8 +205,6 @@ bool SettingsStore::Save(const AppSettings& settings) const noexcept {
         stream << "text_color_rgb=" << std::uppercase << std::hex << std::setw(6) << std::setfill('0') << normalized.text_color_rgb << std::dec << '\n';
         WriteBoolean(stream, "start_with_windows", normalized.start_with_windows);
         WriteBoolean(stream, "start_minimized", normalized.start_minimized);
-        WriteBoolean(stream, "minimize_to_tray", normalized.minimize_to_tray);
-        WriteBoolean(stream, "hide_taskbar_when_minimized", normalized.hide_taskbar_when_minimized);
         WriteBoolean(stream, "show_osd", normalized.show_osd);
         stream << "osd_position=" << static_cast<unsigned>(normalized.osd_position) << '\n';
         stream << "osd_layout=" << static_cast<unsigned>(normalized.osd_layout) << '\n';

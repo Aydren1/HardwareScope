@@ -11,10 +11,10 @@
 
 namespace hardwarescope {
 
-inline constexpr wchar_t kSensorBridgeName[] = L"Global\\HardwareScope.SensorBridge.v3";
-inline constexpr wchar_t kFpsControlPipeName[] = L"\\\\.\\pipe\\HardwareScope.FpsControl.v3";
+inline constexpr wchar_t kSensorBridgeName[] = L"Global\\HardwareScope.SensorBridge.v4";
+inline constexpr wchar_t kFpsControlPipeName[] = L"\\\\.\\pipe\\HardwareScope.MonitoringControl.v4";
 inline constexpr std::uint32_t kSensorBridgeMagic = 0x4853'5632U;
-inline constexpr std::uint32_t kSensorBridgeVersion = 3U;
+inline constexpr std::uint32_t kSensorBridgeVersion = 4U;
 
 struct SharedSensorSnapshot final {
     std::uint32_t magic{};
@@ -31,6 +31,7 @@ struct SharedFpsControl final {
     std::uint32_t version{};
     volatile LONG target_process_id{};
     volatile LONG smoothing_milliseconds{500};
+    volatile LONG hardware_polling_milliseconds{750};
 };
 
 static_assert(offsetof(SharedSensorSnapshot, sequence) % alignof(LONG64) == 0U);
@@ -47,6 +48,7 @@ public:
     void Publish(const SensorSnapshot& snapshot) noexcept;
     [[nodiscard]] std::uint32_t RequestedFpsTarget() noexcept;
     [[nodiscard]] std::uint32_t RequestedFpsSmoothing() noexcept;
+    [[nodiscard]] std::uint32_t RequestedHardwarePollingInterval() noexcept;
     void Close() noexcept;
 
 private:
@@ -55,6 +57,7 @@ private:
     void PollFpsControl() noexcept;
     std::uint32_t requested_fps_target_{};
     std::uint32_t requested_fps_smoothing_{500U};
+    std::uint32_t requested_hardware_polling_interval_{750U};
 };
 
 class SensorBridgeClient final {
@@ -67,7 +70,10 @@ public:
 
     [[nodiscard]] bool Collect(SensorSnapshot& destination) noexcept;
     [[nodiscard]] bool CollectFrameRate(SensorValue& destination) noexcept;
-    [[nodiscard]] bool SetFpsTarget(std::uint32_t process_id, std::uint32_t smoothing_milliseconds) noexcept;
+    [[nodiscard]] bool SetFpsTarget(
+        std::uint32_t process_id,
+        std::uint32_t smoothing_milliseconds,
+        std::uint32_t hardware_polling_milliseconds) noexcept;
     [[nodiscard]] bool Available() const noexcept { return shared_ != nullptr; }
     void Close() noexcept;
 

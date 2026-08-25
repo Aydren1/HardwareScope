@@ -94,6 +94,8 @@ void SensorBridgePublisher::PollFpsControl() noexcept {
         && read == sizeof(request) && request.magic == kSensorBridgeMagic && request.version == kSensorBridgeVersion) {
         requested_fps_target_ = static_cast<std::uint32_t>(request.target_process_id);
         requested_fps_smoothing_ = std::clamp(static_cast<std::uint32_t>(request.smoothing_milliseconds), 250U, 1'250U);
+        requested_hardware_polling_interval_ = std::clamp(
+            static_cast<std::uint32_t>(request.hardware_polling_milliseconds), 100U, 10'000U);
     }
     CloseHandle(pipe);
 }
@@ -108,6 +110,11 @@ std::uint32_t SensorBridgePublisher::RequestedFpsSmoothing() noexcept {
     return requested_fps_smoothing_;
 }
 
+std::uint32_t SensorBridgePublisher::RequestedHardwarePollingInterval() noexcept {
+    PollFpsControl();
+    return requested_hardware_polling_interval_;
+}
+
 void SensorBridgePublisher::Close() noexcept {
     if (shared_ != nullptr) UnmapViewOfFile(shared_);
     if (mapping_ != nullptr) CloseHandle(mapping_);
@@ -115,6 +122,7 @@ void SensorBridgePublisher::Close() noexcept {
     mapping_ = nullptr;
     requested_fps_target_ = 0U;
     requested_fps_smoothing_ = 500U;
+    requested_hardware_polling_interval_ = 750U;
 }
 
 SensorBridgeClient::~SensorBridgeClient() {
@@ -179,7 +187,10 @@ bool SensorBridgeClient::CollectFrameRate(SensorValue& destination) noexcept {
     return true;
 }
 
-bool SensorBridgeClient::SetFpsTarget(const std::uint32_t process_id, const std::uint32_t smoothing_milliseconds) noexcept {
+bool SensorBridgeClient::SetFpsTarget(
+    const std::uint32_t process_id,
+    const std::uint32_t smoothing_milliseconds,
+    const std::uint32_t hardware_polling_milliseconds) noexcept {
     if (!Connect()) return false;
     if (control_pipe_ == nullptr) {
         const auto user_sid = CurrentUserSid();
@@ -210,6 +221,7 @@ bool SensorBridgeClient::SetFpsTarget(const std::uint32_t process_id, const std:
     request.version = kSensorBridgeVersion;
     request.target_process_id = static_cast<LONG>(process_id);
     request.smoothing_milliseconds = static_cast<LONG>(std::clamp(smoothing_milliseconds, 250U, 1'250U));
+    request.hardware_polling_milliseconds = static_cast<LONG>(std::clamp(hardware_polling_milliseconds, 100U, 10'000U));
     DWORD written{};
     const auto success = WriteFile(control_pipe_, &request, sizeof(request), &written, nullptr) && written == sizeof(request);
     static_cast<void>(DisconnectNamedPipe(control_pipe_));

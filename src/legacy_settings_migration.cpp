@@ -85,7 +85,6 @@ bool MigrateLegacySettingsJson(const std::string_view json, AppSettings& destina
     if (const auto value = NumberValue(json, "RefreshSeconds")) migrated.refresh_interval_ms = static_cast<std::uint32_t>(std::lround(*value * 1'000.0));
     if (const auto value = BooleanValue(json, "StartWithWindows")) migrated.start_with_windows = *value;
     if (const auto value = BooleanValue(json, "StartMinimized")) migrated.start_minimized = *value;
-    if (const auto value = BooleanValue(json, "MinimizeToTray")) migrated.minimize_to_tray = *value;
     if (const auto value = BooleanValue(json, "ShowOsd")) migrated.show_osd = *value;
     if (const auto value = BooleanValue(json, "AutomaticUpdates")) migrated.automatic_updates = *value;
     if (const auto value = StringValue(json, "OsdCorner")) {

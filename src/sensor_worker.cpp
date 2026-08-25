@@ -152,7 +152,10 @@ void SensorWorker::Run(const std::stop_token stop_token, const std::chrono::mill
         if (mode_ == SensorWorkerMode::native) {
             const auto game = fps_enabled_ ? FindGameProcess(GetCurrentProcessId()) : GameProcess{};
             game_target_active = game.process_id != 0U;
-            static_cast<void>(privileged_bridge_.SetFpsTarget(game.process_id, fps_smoothing_interval_ms_));
+            static_cast<void>(privileged_bridge_.SetFpsTarget(
+                game.process_id,
+                fps_smoothing_interval_ms_,
+                static_cast<std::uint32_t>(interval.count())));
             const auto now = std::chrono::steady_clock::now();
             auto& hardware = workspace_->last_hardware_snapshot;
             if (hardware.sequence == 0U || now >= next_hardware_refresh) {
@@ -187,7 +190,10 @@ void SensorWorker::Run(const std::stop_token stop_token, const std::chrono::mill
         std::unique_lock lock(wake_mutex);
         static_cast<void>(wake.wait_for(lock, stop_token, publish_interval, [] { return false; }));
     }
-    static_cast<void>(privileged_bridge_.SetFpsTarget(0U, fps_smoothing_interval_ms_));
+    static_cast<void>(privileged_bridge_.SetFpsTarget(
+        0U,
+        fps_smoothing_interval_ms_,
+        static_cast<std::uint32_t>(interval.count())));
     storage_provider_.Reset();
     nvidia_provider_.Close();
     amd_gpu_provider_.Close();

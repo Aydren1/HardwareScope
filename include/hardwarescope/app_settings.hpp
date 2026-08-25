@@ -31,7 +31,7 @@ enum EasyTemperature : std::uint32_t {
 };
 
 struct AppSettings final {
-    static constexpr std::uint32_t kSchemaVersion = 1U;
+    static constexpr std::uint32_t kSchemaVersion = 2U;
     static constexpr std::size_t kMaximumPinnedSensors = 64U;
 
     std::uint32_t refresh_interval_ms{750U};
@@ -40,8 +40,6 @@ struct AppSettings final {
 
     bool start_with_windows{};
     bool start_minimized{};
-    bool minimize_to_tray{true};
-    bool hide_taskbar_when_minimized{true};
 
     bool show_osd{true};
     OsdPosition osd_position{OsdPosition::top_left};

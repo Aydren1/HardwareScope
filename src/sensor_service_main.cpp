@@ -58,19 +58,21 @@ int RunCollector(const HINSTANCE resources, HANDLE const requested_stop, const D
         LARGE_INTEGER after{};
         QueryPerformanceFrequency(&frequency);
         QueryPerformanceCounter(&before);
+        const auto requested_target = publisher.RequestedFpsTarget();
+        const auto requested_smoothing = publisher.RequestedFpsSmoothing();
+        const auto requested_hardware_interval = publisher.RequestedHardwarePollingInterval();
         const auto now = std::chrono::steady_clock::now();
         if (hardware->sequence == 0U || now >= next_hardware_refresh) {
             hardwarescope::ResetSnapshot(*hardware);
             hardware->sequence = sequence + 1U;
             hardware->captured_qpc = static_cast<std::uint64_t>(before.QuadPart);
             collector.Collect(*hardware);
-            next_hardware_refresh = now + std::chrono::milliseconds{500};
+            next_hardware_refresh = now + std::chrono::milliseconds{requested_hardware_interval};
         }
         hardwarescope::CopySnapshot(*hardware, *snapshot);
         snapshot->sequence = ++sequence;
         snapshot->captured_qpc = static_cast<std::uint64_t>(before.QuadPart);
-        const auto requested_target = publisher.RequestedFpsTarget();
-        fps_runner.SetTarget(requested_target, publisher.RequestedFpsSmoothing());
+        fps_runner.SetTarget(requested_target, requested_smoothing);
         const auto fps = fps_runner.Snapshot();
         if (fps.available && snapshot->count < snapshot->sensors.size()) {
             auto& sensor = snapshot->sensors[snapshot->count++];
@@ -91,11 +93,19 @@ int RunCollector(const HINSTANCE resources, HANDLE const requested_stop, const D
                 / static_cast<std::uint64_t>(frequency.QuadPart));
         }
         publisher.Publish(*snapshot);
-        const auto wait = requested_stop == nullptr ? WAIT_TIMEOUT : WaitForSingleObject(requested_stop, 100U);
+        const auto after_publish = std::chrono::steady_clock::now();
+        auto wait_milliseconds = 100U;
+        if (requested_target != 0U) {
+            wait_milliseconds = 50U;
+        } else if (next_hardware_refresh > after_publish) {
+            const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(next_hardware_refresh - after_publish).count() + 1;
+            wait_milliseconds = static_cast<DWORD>(std::clamp<std::int64_t>(remaining, 1, 100));
+        }
+        const auto wait = requested_stop == nullptr ? WAIT_TIMEOUT : WaitForSingleObject(requested_stop, wait_milliseconds);
         if (wait == WAIT_OBJECT_0) break;
         if (maximum_runtime_ms != INFINITE
             && std::chrono::steady_clock::now() - started >= std::chrono::milliseconds{maximum_runtime_ms}) break;
-        if (requested_stop == nullptr) Sleep(100U);
+        if (requested_stop == nullptr) Sleep(wait_milliseconds);
     }
     collector.Close();
     fps_runner.Stop();

@@ -69,8 +69,6 @@ struct DialogState final {
     HWND refresh{};
     HWND start_windows{};
     HWND start_minimized{};
-    HWND minimize_tray{};
-    HWND hide_taskbar{};
     HWND updates{};
     HWND check_updates{};
     HWND show_osd{};
@@ -449,13 +447,13 @@ void Relayout(DialogState& state) noexcept {
     state.relayout_active = false;
 }
 
-void HandleScroll(DialogState& state, const int bar, const WPARAM wparam) noexcept {
+void HandleScroll(DialogState& state, const int bar, const WPARAM wparam, const int line_count = 1) noexcept {
     SCROLLINFO information{sizeof(information), SIF_ALL};
     if (!GetScrollInfo(state.window, bar, &information)) return;
     auto position = information.nPos;
     switch (LOWORD(wparam)) {
-    case SB_LINEUP: position -= Scale(state, 24); break;
-    case SB_LINEDOWN: position += Scale(state, 24); break;
+    case SB_LINEUP: position -= Scale(state, 24) * line_count; break;
+    case SB_LINEDOWN: position += Scale(state, 24) * line_count; break;
     case SB_PAGEUP: position -= static_cast<int>(information.nPage); break;
     case SB_PAGEDOWN: position += static_cast<int>(information.nPage); break;
     case SB_THUMBPOSITION:
@@ -470,7 +468,7 @@ void HandleScroll(DialogState& state, const int bar, const WPARAM wparam) noexce
     information.nPos = position;
     static_cast<void>(SetScrollInfo(state.window, bar, &information, TRUE));
     LayoutControls(state);
-    InvalidateRect(state.window, nullptr, TRUE);
+    InvalidateRect(state.window, nullptr, FALSE);
 }
 
 void BuildControls(DialogState& state) {
@@ -489,14 +487,25 @@ void BuildControls(DialogState& state) {
     state.theme = Combo(state, 82, 0, {{L"Dark", 0U}, {L"Light", 1U}}, static_cast<std::uint32_t>(state.draft.theme));
     Label(state, L"Text and accent color", 122, 0);
     state.color = Combo(state, 122, 0, {{L"Teal", 0x52E0D4U}, {L"White", 0xFFFFFFU}, {L"Red", 0xFF5252U}, {L"Orange", 0xFF9F43U}, {L"Yellow", 0xFFD93DU}}, state.draft.text_color_rgb);
-    Label(state, L"Hardware refresh", 162, 0);
-    state.refresh = Combo(state, 162, 0, {{L"100 ms", 100U}, {L"250 ms", 250U}, {L"500 ms", 500U}, {L"750 ms", 750U}, {L"1 second", 1'000U}, {L"2 seconds", 2'000U}, {L"5 seconds", 5'000U}}, state.draft.refresh_interval_ms);
+    Label(state, L"Hardware polling interval", 162, 0);
+    state.refresh = Combo(state, 162, 0, {
+        {L"100 ms (fastest)", 100U},
+        {L"125 ms", 125U},
+        {L"200 ms", 200U},
+        {L"250 ms", 250U},
+        {L"333 ms", 333U},
+        {L"500 ms", 500U},
+        {L"750 ms (recommended)", 750U},
+        {L"1000 ms", 1'000U},
+        {L"1500 ms", 1'500U},
+        {L"2000 ms", 2'000U},
+        {L"3000 ms", 3'000U},
+        {L"5000 ms", 5'000U},
+        {L"10000 ms (lightest)", 10'000U}}, state.draft.refresh_interval_ms);
     state.start_windows = Check(state, L"Start HardwareScope with Windows", state.draft.start_with_windows, 218, 0);
     state.start_minimized = Check(state, L"Start minimized to the notification tray", state.draft.start_minimized, 254, 0);
-    state.minimize_tray = Check(state, L"Minimize button hides HardwareScope in the tray", state.draft.minimize_to_tray, 290, 0);
-    state.hide_taskbar = Check(state, L"Remove the taskbar button while minimized", state.draft.hide_taskbar_when_minimized, 326, 0);
-    state.updates = Check(state, L"Automatically download and install stable updates", state.draft.automatic_updates, 378, 0);
-    state.check_updates = PushButton(state, L"Check for updates", 42, 430, 180, 36, kSettingsCheckUpdatesCommand, 0);
+    state.updates = Check(state, L"Automatically download and install stable updates", state.draft.automatic_updates, 306, 0);
+    state.check_updates = PushButton(state, L"Check for updates", 42, 358, 180, 36, kSettingsCheckUpdatesCommand, 0);
 
     state.show_osd = Check(state, L"Show the on-screen display", state.draft.show_osd, 82, 1);
     Label(state, L"Screen corner", 126, 1);
@@ -550,8 +559,6 @@ void ReadControls(DialogState& state) noexcept {
     state.draft.refresh_interval_ms = ComboValue(state.refresh, state.draft.refresh_interval_ms);
     state.draft.start_with_windows = Checked(state.start_windows);
     state.draft.start_minimized = Checked(state.start_minimized);
-    state.draft.minimize_to_tray = Checked(state.minimize_tray);
-    state.draft.hide_taskbar_when_minimized = Checked(state.hide_taskbar);
     state.draft.automatic_updates = Checked(state.updates);
     state.draft.show_osd = Checked(state.show_osd);
     state.draft.osd_position = static_cast<OsdPosition>(ComboValue(state.position, 0U));
@@ -758,9 +765,7 @@ LRESULT CALLBACK WindowProcedure(const HWND window, const UINT message, const WP
         return 0;
     case WM_MOUSEWHEEL: {
         const auto lines = std::max(1, std::abs(GET_WHEEL_DELTA_WPARAM(wparam)) / WHEEL_DELTA) * 3;
-        for (int line = 0; line < lines; ++line) {
-            HandleScroll(*state, SB_VERT, MAKEWPARAM(GET_WHEEL_DELTA_WPARAM(wparam) > 0 ? SB_LINEUP : SB_LINEDOWN, 0));
-        }
+        HandleScroll(*state, SB_VERT, MAKEWPARAM(GET_WHEEL_DELTA_WPARAM(wparam) > 0 ? SB_LINEUP : SB_LINEDOWN, 0), lines);
         return 0;
     }
     case WM_COMMAND:
@@ -802,11 +807,14 @@ LRESULT CALLBACK WindowProcedure(const HWND window, const UINT message, const WP
         state->done = true;
         DestroyWindow(window);
         return 0;
-    case WM_ERASEBKGND: {
-        RECT bounds{};
-        GetClientRect(window, &bounds);
-        FillRect(reinterpret_cast<HDC>(wparam), &bounds, state->background_brush);
+    case WM_ERASEBKGND:
         return 1;
+    case WM_PAINT: {
+        PAINTSTRUCT paint{};
+        const auto dc = BeginPaint(window, &paint);
+        if (dc != nullptr) FillRect(dc, &paint.rcPaint, state->background_brush);
+        EndPaint(window, &paint);
+        return 0;
     }
     case WM_CTLCOLORSTATIC:
     case WM_CTLCOLORBTN: {
@@ -875,7 +883,7 @@ bool ShowSettingsWindow(const HWND owner, AppSettings& settings, const SensorSna
         WS_EX_DLGMODALFRAME,
         kClassName,
         L"HardwareScope settings",
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_HSCROLL | WS_VSCROLL,
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_HSCROLL | WS_VSCROLL | WS_CLIPCHILDREN,
         x,
         y,
         width,
