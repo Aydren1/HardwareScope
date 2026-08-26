@@ -29,10 +29,23 @@ namespace {
 constexpr float kContentInset = 12.0F;
 constexpr float kSearchTop = 78.0F;
 constexpr float kSearchHeight = 32.0F;
+constexpr float kFavoritesButtonWidth = 126.0F;
+constexpr float kToolbarGap = 10.0F;
+constexpr float kFavoriteSlotWidth = 25.0F;
 constexpr float kTableTop = 118.0F;
 constexpr float kColumnHeaderHeight = 29.0F;
 constexpr float kSensorRowHeight = 31.0F;
 const GUID kTrayIconGuid{0xE58BB907, 0x9AEF, 0x4E50, {0x9D, 0x2F, 0x5A, 0x65, 0xB4, 0xB4, 0x2D, 0x40}};
+
+D2D1_RECT_F FavoritesButtonBounds(const D2D1_SIZE_F size) noexcept {
+    const auto right = std::max(kContentInset + kFavoritesButtonWidth, size.width - kContentInset);
+    return D2D1::RectF(right - kFavoritesButtonWidth, kSearchTop, right, kSearchTop + kSearchHeight);
+}
+
+float SearchRightEdge(const D2D1_SIZE_F size) noexcept {
+    const auto favorites = FavoritesButtonBounds(size);
+    return std::max(kContentInset + 80.0F, std::min(500.0F, favorites.left - kToolbarGap));
+}
 
 HICON LoadHardwareScopeIcon(
     const HINSTANCE instance,
@@ -579,6 +592,7 @@ std::uint64_t NativeWindow::LatestSnapshotSequence() const noexcept {
 
 void NativeWindow::HandleSnapshotMessage() noexcept {
     snapshots_.ReadLatest(ui_snapshot_);
+    if (InitializeDefaultFavorites(ui_snapshot_, settings_)) static_cast<void>(settings_store_.Save(settings_));
     osd_window_.Update(ui_snapshot_);
     fps_osd_window_.Update(ui_snapshot_);
     if (resume_waiting_for_snapshot_) {
@@ -725,12 +739,21 @@ std::uint64_t NativeWindow::PaintP95Microseconds() const noexcept {
 }
 
 void NativeWindow::DrawSearch(const D2D1_SIZE_F& size) {
-    const auto right = std::min(size.width - kContentInset, 500.0F);
+    const auto right = SearchRightEdge(size);
     const auto bounds = D2D1::RectF(kContentInset, kSearchTop, right, kSearchTop + kSearchHeight);
     render_target_->FillRectangle(bounds, surface_brush_.Get());
     render_target_->DrawRectangle(bounds, search_active_ ? accent_brush_.Get() : line_brush_.Get(), search_active_ ? 2.0F : 1.0F);
     const auto* text = search_text_.empty() ? L"Search sensors or hardware..." : search_text_.c_str();
     DrawTextLine(text, D2D1::RectF(kContentInset + 12.0F, kSearchTop, right - 10.0F, kSearchTop + kSearchHeight), search_text_.empty() ? muted_brush_.Get() : text_brush_.Get(), body_format_.Get());
+
+    const auto favorites = FavoritesButtonBounds(size);
+    render_target_->FillRectangle(favorites, settings_.favorites_only ? surface_alternate_brush_.Get() : surface_brush_.Get());
+    render_target_->DrawRectangle(favorites, settings_.favorites_only ? accent_brush_.Get() : line_brush_.Get(), settings_.favorites_only ? 1.5F : 1.0F);
+    DrawTextLine(
+        settings_.favorites_only ? L"\u2605  Favorites" : L"\u2606  Favorites",
+        D2D1::RectF(favorites.left + 12.0F, favorites.top, favorites.right - 8.0F, favorites.bottom),
+        settings_.favorites_only ? accent_brush_.Get() : text_brush_.Get(),
+        body_format_.Get());
 }
 
 void NativeWindow::DrawHeader(const D2D1_SIZE_F& size) {
@@ -801,17 +824,29 @@ void NativeWindow::DrawSensorTable(const D2D1_SIZE_F& size, const SensorSnapshot
     const std::array<const wchar_t*, 6> headers{L"OSD", L"Sensor", L"Current", L"Minimum", L"Maximum", L"Hardware"};
     const auto columns = CalculateTableColumns(left, table_width);
     for (std::size_t index = 0; index < headers.size(); ++index) {
-        DrawTextLine(headers[index], D2D1::RectF(columns[index], kTableTop, columns[index + 1], kTableTop + kColumnHeaderHeight), muted_brush_.Get(), value_format_.Get());
+        const auto text_left = index == 1U ? columns[index] + kFavoriteSlotWidth : columns[index];
+        DrawTextLine(headers[index], D2D1::RectF(text_left, kTableTop, columns[index + 1], kTableTop + kColumnHeaderHeight), muted_brush_.Get(), value_format_.Get());
     }
+    DrawTextLine(L"\u2606", D2D1::RectF(columns[1] + 2.0F, kTableTop, columns[1] + kFavoriteSlotWidth, kTableTop + kColumnHeaderHeight), muted_brush_.Get(), value_format_.Get());
 
     const auto viewport_top = kTableTop + kColumnHeaderHeight;
     const auto viewport_bottom = std::max(viewport_top, size.height);
     const auto viewport_height = viewport_bottom - viewport_top;
-    const auto view = BuildSensorView(snapshot, collapsed_sections_, search_text_, true);
+    const auto view = BuildSensorView(snapshot, collapsed_sections_, search_text_, true, &settings_);
     const auto content_height = static_cast<float>(view.count) * kSensorRowHeight;
     scroll_offset_ = std::clamp(scroll_offset_, 0.0F, std::max(0.0F, content_height - viewport_height));
     const auto first = static_cast<std::uint32_t>(scroll_offset_ / kSensorRowHeight);
     auto y = viewport_top - std::fmod(scroll_offset_, kSensorRowHeight);
+
+    if (view.count == 0U && settings_.favorites_only) {
+        DrawTextLine(
+            search_text_.empty()
+                ? L"No favorites yet. Turn off Favorites, then click a star beside any sensor."
+                : L"No favorites match your search.",
+            D2D1::RectF(left + 18.0F, viewport_top + 18.0F, left + table_width - 18.0F, viewport_top + 62.0F),
+            muted_brush_.Get(),
+            body_format_.Get());
+    }
 
     for (auto row_index = first; row_index < view.count && y < viewport_bottom; ++row_index, y += kSensorRowHeight) {
         const auto& row = view.rows[row_index];
@@ -861,6 +896,11 @@ void NativeWindow::DrawSensorTable(const D2D1_SIZE_F& size, const SensorSnapshot
             render_target_->DrawLine(D2D1::Point2F(checkbox.left + 3.0F, checkbox.top + 8.0F), D2D1::Point2F(checkbox.left + 7.0F, checkbox.bottom - 3.0F), section_brush, 2.0F);
             render_target_->DrawLine(D2D1::Point2F(checkbox.left + 7.0F, checkbox.bottom - 3.0F), D2D1::Point2F(checkbox.right - 3.0F, checkbox.top + 3.0F), section_brush, 2.0F);
         }
+        DrawTextLine(
+            settings_.IsFavorite(sensor.id) ? L"\u2605" : L"\u2606",
+            D2D1::RectF(columns[1] + 2.0F, y, columns[1] + kFavoriteSlotWidth, y + kSensorRowHeight),
+            settings_.IsFavorite(sensor.id) ? section_brush : muted_brush_.Get(),
+            value_format_.Get());
         wchar_t current[48]{};
         wchar_t minimum[48]{};
         wchar_t maximum[48]{};
@@ -892,12 +932,12 @@ void NativeWindow::DrawSensorTable(const D2D1_SIZE_F& size, const SensorSnapshot
             }
             return layout.Get();
         };
-        const auto name_layout = ensure_layout(layouts.name_layout, sensor.name.data(), body_format_.Get(), columns[2] - columns[1]);
+        const auto name_layout = ensure_layout(layouts.name_layout, sensor.name.data(), body_format_.Get(), columns[2] - columns[1] - kFavoriteSlotWidth);
         const auto current_layout = ensure_layout(layouts.current_layout, layouts.current.data(), value_format_.Get(), columns[3] - columns[2]);
         const auto minimum_layout = ensure_layout(layouts.minimum_layout, layouts.minimum.data(), body_format_.Get(), columns[4] - columns[3]);
         const auto maximum_layout = ensure_layout(layouts.maximum_layout, layouts.maximum.data(), body_format_.Get(), columns[5] - columns[4]);
         const auto hardware_layout = ensure_layout(layouts.hardware_layout, sensor.hardware.data(), body_format_.Get(), columns[6] - columns[5]);
-        if (name_layout != nullptr) render_target_->DrawTextLayout(D2D1::Point2F(columns[1], y), name_layout, text_brush_.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
+        if (name_layout != nullptr) render_target_->DrawTextLayout(D2D1::Point2F(columns[1] + kFavoriteSlotWidth, y), name_layout, text_brush_.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
         if (current_layout != nullptr) render_target_->DrawTextLayout(D2D1::Point2F(columns[2], y), current_layout, section_brush, D2D1_DRAW_TEXT_OPTIONS_CLIP);
         if (minimum_layout != nullptr) render_target_->DrawTextLayout(D2D1::Point2F(columns[3], y), minimum_layout, muted_brush_.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
         if (maximum_layout != nullptr) render_target_->DrawTextLayout(D2D1::Point2F(columns[4], y), maximum_layout, muted_brush_.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
@@ -979,10 +1019,20 @@ void NativeWindow::HandleContentClick(const POINT client_point) {
     RECT client{};
     GetClientRect(window_, &client);
     const auto client_width = static_cast<float>(client.right) * scale;
-    const auto search_right = std::min(client_width - kContentInset, 500.0F);
+    const auto size = D2D1::SizeF(client_width, static_cast<float>(client.bottom) * scale);
+    const auto search_right = SearchRightEdge(size);
     if (x >= kContentInset && x <= search_right && y >= kSearchTop && y <= kSearchTop + kSearchHeight) {
         search_active_ = true;
         SetFocus(window_);
+        InvalidateRect(window_, nullptr, FALSE);
+        return;
+    }
+    const auto favorites = FavoritesButtonBounds(size);
+    if (x >= favorites.left && x <= favorites.right && y >= favorites.top && y <= favorites.bottom) {
+        search_active_ = false;
+        settings_.favorites_only = !settings_.favorites_only;
+        scroll_offset_ = 0.0F;
+        static_cast<void>(settings_store_.Save(settings_));
         InvalidateRect(window_, nullptr, FALSE);
         return;
     }
@@ -993,7 +1043,7 @@ void NativeWindow::HandleContentClick(const POINT client_point) {
     const auto viewport_bottom = static_cast<float>(client.bottom) * scale;
     if (y >= viewport_top && y < viewport_bottom) {
         snapshots_.ReadLatest(ui_snapshot_);
-        const auto view = BuildSensorView(ui_snapshot_, collapsed_sections_, search_text_, true);
+        const auto view = BuildSensorView(ui_snapshot_, collapsed_sections_, search_text_, true, &settings_);
         const auto row_index = static_cast<std::uint32_t>((y - viewport_top + scroll_offset_) / kSensorRowHeight);
         if (row_index < view.count && view.rows[row_index].is_section) {
             collapsed_sections_ ^= 1U << static_cast<std::uint32_t>(view.rows[row_index].section);
@@ -1003,11 +1053,20 @@ void NativeWindow::HandleContentClick(const POINT client_point) {
         } else if (row_index < view.count && !view.rows[row_index].is_placeholder) {
             const auto table_width = std::max(0.0F, client_width - kContentInset * 2.0F);
             const auto columns = CalculateTableColumns(kContentInset, table_width);
+            const auto& sensor = ui_snapshot_.sensors[view.rows[row_index].sensor_index];
+            if (x >= columns[1] && x <= columns[1] + kFavoriteSlotWidth) {
+                if (settings_.IsFavorite(sensor.id)) static_cast<void>(settings_.RemoveFavorite(sensor.id));
+                else static_cast<void>(settings_.AddFavorite(sensor.id));
+                settings_.favorites_initialized = true;
+                static_cast<void>(settings_store_.Save(settings_));
+                scroll_offset_ = std::max(0.0F, scroll_offset_ - (settings_.favorites_only ? kSensorRowHeight : 0.0F));
+                InvalidateRect(window_, nullptr, FALSE);
+                return;
+            }
             if (x < columns[0] || x > columns[1]) {
                 if (was_active) InvalidateRect(window_, nullptr, FALSE);
                 return;
             }
-            const auto& sensor = ui_snapshot_.sensors[view.rows[row_index].sensor_index];
             const auto selected = IsSensorSelectedForOsd(sensor, settings_);
             SetSensorSelectedForOsd(sensor, settings_, !selected);
             static_cast<void>(settings_store_.Save(settings_));
@@ -1090,7 +1149,7 @@ void NativeWindow::UpdateHover(const POINT client_point) {
         const auto viewport_bottom = height;
         if (y >= viewport_top && y < viewport_bottom) {
             snapshots_.ReadLatest(ui_snapshot_);
-            const auto view = BuildSensorView(ui_snapshot_, collapsed_sections_, search_text_, true);
+            const auto view = BuildSensorView(ui_snapshot_, collapsed_sections_, search_text_, true, &settings_);
             const auto row_index = static_cast<std::uint32_t>((y - viewport_top + scroll_offset_) / kSensorRowHeight);
             if (row_index < view.count && !view.rows[row_index].is_section && !view.rows[row_index].is_placeholder) {
                 next_kind = HoverKind::sensor;

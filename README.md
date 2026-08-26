@@ -39,7 +39,7 @@ roles and release controls, and the [privacy policy](PRIVACY.md).
 - Dark and light themes with configurable accent/text colors
 - Compact OSD with corner placement, vertical or horizontal layout, spacing,
   opacity, and scaling controls
-- Configurable EZ temperature selection for CPU, GPU core, and GPU memory
+- A simple Favorites view with one-click stars and automatic CPU/GPU temperature defaults
 - Independent, game-only FPS capture and display settings
 - Minimize-to-tray behavior, startup options, and single-instance enforcement
 - Verified GitHub updates with installer size and SHA-256 validation

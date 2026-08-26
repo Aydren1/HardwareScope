@@ -68,12 +68,14 @@ Enum EnumValue(const Values& values, const char* key, const Enum fallback, const
     return raw <= maximum ? static_cast<Enum>(raw) : fallback;
 }
 
-std::array<std::uint64_t, AppSettings::kMaximumPinnedSensors> ParsePinnedSensors(
+template <std::size_t Size>
+std::array<std::uint64_t, Size> ParseSensorIds(
     const Values& values,
+    const char* const key,
     std::uint32_t& count) noexcept {
-    std::array<std::uint64_t, AppSettings::kMaximumPinnedSensors> result{};
+    std::array<std::uint64_t, Size> result{};
     count = 0;
-    const auto iterator = values.find("pinned_sensor_ids");
+    const auto iterator = values.find(key);
     if (iterator == values.end()) return result;
 
     std::string_view text{iterator->second};
@@ -126,6 +128,7 @@ void AppSettings::Normalize() noexcept {
     fps_scale_percent = std::clamp(fps_scale_percent, 50U, 300U);
     fps_refresh_interval_ms = std::clamp(fps_refresh_interval_ms, 50U, 500U);
     fps_smoothing_interval_ms = std::clamp(fps_smoothing_interval_ms, 250U, 1'250U);
+    favorite_sensor_count = std::min<std::uint32_t>(favorite_sensor_count, static_cast<std::uint32_t>(favorite_sensor_ids.size()));
     pinned_sensor_count = std::min<std::uint32_t>(pinned_sensor_count, static_cast<std::uint32_t>(pinned_sensor_ids.size()));
     collapsed_sections &= 0x01FFU;
 }
@@ -149,6 +152,27 @@ bool AppSettings::UnpinSensor(const std::uint64_t sensor_id) noexcept {
 bool AppSettings::IsSensorPinned(const std::uint64_t sensor_id) const noexcept {
     return std::find(pinned_sensor_ids.begin(), pinned_sensor_ids.begin() + pinned_sensor_count, sensor_id)
         != pinned_sensor_ids.begin() + pinned_sensor_count;
+}
+
+bool AppSettings::AddFavorite(const std::uint64_t sensor_id) noexcept {
+    if (sensor_id == 0U || IsFavorite(sensor_id) || favorite_sensor_count >= favorite_sensor_ids.size()) return false;
+    favorite_sensor_ids[favorite_sensor_count++] = sensor_id;
+    return true;
+}
+
+bool AppSettings::RemoveFavorite(const std::uint64_t sensor_id) noexcept {
+    const auto end = favorite_sensor_ids.begin() + favorite_sensor_count;
+    const auto found = std::find(favorite_sensor_ids.begin(), end, sensor_id);
+    if (found == end) return false;
+    std::move(found + 1, end, found);
+    --favorite_sensor_count;
+    favorite_sensor_ids[favorite_sensor_count] = 0U;
+    return true;
+}
+
+bool AppSettings::IsFavorite(const std::uint64_t sensor_id) const noexcept {
+    return std::find(favorite_sensor_ids.begin(), favorite_sensor_ids.begin() + favorite_sensor_count, sensor_id)
+        != favorite_sensor_ids.begin() + favorite_sensor_count;
 }
 
 SettingsStore::SettingsStore(std::filesystem::path path) noexcept : path_(std::move(path)) {}
@@ -208,7 +232,10 @@ bool SettingsStore::Load(AppSettings& destination) const noexcept {
         loaded.skipped_update_minor = IntegerValue(values, "skipped_update_minor", loaded.skipped_update_minor);
         loaded.skipped_update_patch = IntegerValue(values, "skipped_update_patch", loaded.skipped_update_patch);
         loaded.collapsed_sections = IntegerValue(values, "collapsed_sections", loaded.collapsed_sections);
-        loaded.pinned_sensor_ids = ParsePinnedSensors(values, loaded.pinned_sensor_count);
+        loaded.favorites_only = BooleanValue(values, "favorites_only", loaded.easy_temperature_enabled);
+        loaded.favorites_initialized = BooleanValue(values, "favorites_initialized", false);
+        loaded.favorite_sensor_ids = ParseSensorIds<AppSettings::kMaximumFavoriteSensors>(values, "favorite_sensor_ids", loaded.favorite_sensor_count);
+        loaded.pinned_sensor_ids = ParseSensorIds<AppSettings::kMaximumPinnedSensors>(values, "pinned_sensor_ids", loaded.pinned_sensor_count);
         loaded.Normalize();
         destination = loaded;
         return true;
@@ -267,6 +294,14 @@ bool SettingsStore::Save(const AppSettings& settings) const noexcept {
         stream << "skipped_update_minor=" << normalized.skipped_update_minor << '\n';
         stream << "skipped_update_patch=" << normalized.skipped_update_patch << '\n';
         stream << "collapsed_sections=" << normalized.collapsed_sections << '\n';
+        WriteBoolean(stream, "favorites_only", normalized.favorites_only);
+        WriteBoolean(stream, "favorites_initialized", normalized.favorites_initialized);
+        stream << "favorite_sensor_ids=";
+        for (std::uint32_t index = 0; index < normalized.favorite_sensor_count; ++index) {
+            if (index != 0U) stream << ',';
+            stream << normalized.favorite_sensor_ids[index];
+        }
+        stream << '\n';
         stream << "pinned_sensor_ids=";
         for (std::uint32_t index = 0; index < normalized.pinned_sensor_count; ++index) {
             if (index != 0U) stream << ',';

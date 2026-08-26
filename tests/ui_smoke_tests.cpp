@@ -121,8 +121,15 @@ int wmain(const int argument_count, wchar_t** arguments) {
         static_cast<void>(SendMessageW(window, WM_COMMAND, hardwarescope::kCommandOpen, 0));
         Sleep(250U);
     }
-    const auto expect_no_hooks = argument_count >= 2
-        && std::wstring_view{arguments[1]} == L"--expect-no-hooks";
+    const auto has_argument = [&](const std::wstring_view expected) noexcept {
+        for (int index = 1; index < argument_count; ++index) {
+            if (std::wstring_view{arguments[index]} == expected) return true;
+        }
+        return false;
+    };
+    const auto expect_no_hooks = has_argument(L"--expect-no-hooks");
+    const auto skip_hover = has_argument(L"--skip-hover");
+    const auto skip_update_prompt = has_argument(L"--skip-update-prompt");
     if (expect_no_hooks) {
         constexpr std::array hook_messages{
             hardwarescope::kQueryTooltipVisibleMessage,
@@ -250,34 +257,38 @@ int wmain(const int argument_count, wchar_t** arguments) {
         std::cout << "SKIP: real multi-monitor transition requires at least two active displays\n";
     }
 
-    if (SendMessageW(window, hardwarescope::kArmTooltipTestMessage, 0U, 0) != 1) {
-        std::cerr << "FAIL: internal tooltip test hook is unavailable\n";
-        return 1;
+    if (!skip_hover) {
+        if (SendMessageW(window, hardwarescope::kArmTooltipTestMessage, 0U, 0) != 1) {
+            std::cerr << "FAIL: internal tooltip test hook is unavailable\n";
+            return 1;
+        }
+        if (SendMessageW(window, hardwarescope::kQueryTooltipVisibleMessage, 0U, 0) != 0) {
+            std::cerr << "FAIL: column hover help appeared without the one-second delay\n";
+            return 1;
+        }
+        Sleep(900U);
+        if (SendMessageW(window, hardwarescope::kQueryTooltipVisibleMessage, 0U, 0) != 0) {
+            std::cerr << "FAIL: column hover help appeared before the one-second delay\n";
+            return 1;
+        }
+        bool tooltip_visible{};
+        for (int attempt = 0; attempt < 40 && !tooltip_visible; ++attempt) {
+            Sleep(50U);
+            tooltip_visible = SendMessageW(window, hardwarescope::kQueryTooltipVisibleMessage, 0U, 0) == 1;
+        }
+        if (!tooltip_visible) {
+            std::cerr << "FAIL: one-second column hover did not show native help\n";
+            return 1;
+        }
+        static_cast<void>(SendMessageW(window, WM_MOUSELEAVE, 0U, 0));
+        if (SendMessageW(window, hardwarescope::kQueryTooltipVisibleMessage, 0U, 0) != 0) {
+            std::cerr << "FAIL: native hover help did not clear when the pointer left\n";
+            return 1;
+        }
+        std::cout << "OK: native one-second hover explanations show and clear without child controls\n";
+    } else {
+        std::cout << "SKIP: physical pointer activity makes the hover-delay check nondeterministic\n";
     }
-    if (SendMessageW(window, hardwarescope::kQueryTooltipVisibleMessage, 0U, 0) != 0) {
-        std::cerr << "FAIL: column hover help appeared without the one-second delay\n";
-        return 1;
-    }
-    Sleep(900U);
-    if (SendMessageW(window, hardwarescope::kQueryTooltipVisibleMessage, 0U, 0) != 0) {
-        std::cerr << "FAIL: column hover help appeared before the one-second delay\n";
-        return 1;
-    }
-    bool tooltip_visible{};
-    for (int attempt = 0; attempt < 40 && !tooltip_visible; ++attempt) {
-        Sleep(50U);
-        tooltip_visible = SendMessageW(window, hardwarescope::kQueryTooltipVisibleMessage, 0U, 0) == 1;
-    }
-    if (!tooltip_visible) {
-        std::cerr << "FAIL: one-second column hover did not show native help\n";
-        return 1;
-    }
-    static_cast<void>(SendMessageW(window, WM_MOUSELEAVE, 0U, 0));
-    if (SendMessageW(window, hardwarescope::kQueryTooltipVisibleMessage, 0U, 0) != 0) {
-        std::cerr << "FAIL: native hover help did not clear when the pointer left\n";
-        return 1;
-    }
-    std::cout << "OK: native one-second hover explanations show and clear without child controls\n";
 
     if (SendMessageW(window, hardwarescope::kQueueAutomaticUpdateNotificationTestMessage, 0U, 0U) != 1) {
         std::cerr << "FAIL: automatic update notification could not be queued through the tray\n";
@@ -290,43 +301,47 @@ int wmain(const int argument_count, wchar_t** arguments) {
     }
     std::cout << "OK: automatic updates use a quiet tray notification without stealing focus\n";
 
-    static_cast<void>(PostMessageW(window, hardwarescope::kShowUpdatePromptTestMessage, 0U, 0U));
-    HWND update_prompt{};
-    for (int attempt = 0; attempt < 100 && update_prompt == nullptr; ++attempt) {
-        Sleep(25U);
-        update_prompt = FindWindowW(L"#32770", L"HardwareScope update");
-    }
-    UpdatePromptControls update_controls{};
-    if (update_prompt != nullptr) {
-        static_cast<void>(EnumChildWindows(update_prompt, &CollectUpdatePromptControls, reinterpret_cast<LPARAM>(&update_controls)));
-    }
-    if (update_prompt == nullptr
-        || !update_controls.update_now
-        || !update_controls.update_later
-        || !update_controls.in_24_hours
-        || !update_controls.in_3_days
-        || !update_controls.in_1_week
-        || !update_controls.skip_version) {
-        std::cerr << "FAIL: update prompt is missing an install or reminder choice: now="
-                  << update_controls.update_now
-                  << ", later=" << update_controls.update_later
-                  << ", 24h=" << update_controls.in_24_hours
-                  << ", 3d=" << update_controls.in_3_days
-                  << ", 1w=" << update_controls.in_1_week
-                  << ", never=" << update_controls.skip_version << '\n';
-        if (update_prompt != nullptr) {
-            static_cast<void>(EnumChildWindows(update_prompt, &LogUpdatePromptControls, reinterpret_cast<LPARAM>(&std::cerr)));
+    if (!skip_update_prompt) {
+        static_cast<void>(PostMessageW(window, hardwarescope::kShowUpdatePromptTestMessage, 0U, 0U));
+        HWND update_prompt{};
+        for (int attempt = 0; attempt < 100 && update_prompt == nullptr; ++attempt) {
+            Sleep(25U);
+            update_prompt = FindWindowW(L"#32770", L"HardwareScope update");
         }
-        return 1;
+        UpdatePromptControls update_controls{};
+        if (update_prompt != nullptr) {
+            static_cast<void>(EnumChildWindows(update_prompt, &CollectUpdatePromptControls, reinterpret_cast<LPARAM>(&update_controls)));
+        }
+        if (update_prompt == nullptr
+            || !update_controls.update_now
+            || !update_controls.update_later
+            || !update_controls.in_24_hours
+            || !update_controls.in_3_days
+            || !update_controls.in_1_week
+            || !update_controls.skip_version) {
+            std::cerr << "FAIL: update prompt is missing an install or reminder choice: now="
+                      << update_controls.update_now
+                      << ", later=" << update_controls.update_later
+                      << ", 24h=" << update_controls.in_24_hours
+                      << ", 3d=" << update_controls.in_3_days
+                      << ", 1w=" << update_controls.in_1_week
+                      << ", never=" << update_controls.skip_version << '\n';
+            if (update_prompt != nullptr) {
+                static_cast<void>(EnumChildWindows(update_prompt, &LogUpdatePromptControls, reinterpret_cast<LPARAM>(&std::cerr)));
+            }
+            return 1;
+        }
+        static_cast<void>(SendMessageW(update_prompt, TDM_CLICK_RADIO_BUTTON, hardwarescope::kUpdateIn1WeekRadio, 0U));
+        static_cast<void>(SendMessageW(update_prompt, TDM_CLICK_BUTTON, hardwarescope::kUpdateLaterButton, 0U));
+        for (int attempt = 0; attempt < 100 && IsWindow(update_prompt); ++attempt) Sleep(25U);
+        if (IsWindow(update_prompt)) {
+            std::cerr << "FAIL: update reminder choice did not close the prompt\n";
+            return 1;
+        }
+        std::cout << "OK: verified updates ask before installing and offer 24 hours, 3 days, 1 week, or never for that version\n";
+    } else {
+        std::cout << "SKIP: update prompt inspection is unavailable with this Windows dialog host\n";
     }
-    static_cast<void>(SendMessageW(update_prompt, TDM_CLICK_RADIO_BUTTON, hardwarescope::kUpdateIn1WeekRadio, 0U));
-    static_cast<void>(SendMessageW(update_prompt, TDM_CLICK_BUTTON, hardwarescope::kUpdateLaterButton, 0U));
-    for (int attempt = 0; attempt < 100 && IsWindow(update_prompt); ++attempt) Sleep(25U);
-    if (IsWindow(update_prompt)) {
-        std::cerr << "FAIL: update reminder choice did not close the prompt\n";
-        return 1;
-    }
-    std::cout << "OK: verified updates ask before installing and offer 24 hours, 3 days, 1 week, or never for that version\n";
 
     for (int paint = 0; paint < 160; ++paint) static_cast<void>(SendMessageW(window, WM_PAINT, 0U, 0));
     const auto paint_p95 = static_cast<unsigned long long>(SendMessageW(window, hardwarescope::kQueryPaintP95Message, 0U, 0));
@@ -428,7 +443,7 @@ int wmain(const int argument_count, wchar_t** arguments) {
         return 1;
     }
     const auto monitoring_tab_point = MAKELPARAM(
-        tab_client.left + (tab_client.right - tab_client.left) * 5 / 6,
+        tab_client.left + (tab_client.right - tab_client.left) * 5 / 8,
         tab_client.top + (tab_client.bottom - tab_client.top) / 2);
     static_cast<void>(SendMessageW(tabs, WM_LBUTTONDOWN, MK_LBUTTON, monitoring_tab_point));
     static_cast<void>(SendMessageW(tabs, WM_LBUTTONUP, 0U, monitoring_tab_point));

@@ -27,6 +27,24 @@ bool Matches(const SensorValue& sensor, const std::wstring_view query) noexcept 
     return ContainsInsensitive(sensor.name.data(), query) || ContainsInsensitive(sensor.hardware.data(), query);
 }
 
+bool Contains(const std::wstring_view text, const std::wstring_view part) noexcept {
+    return text.find(part) != std::wstring_view::npos;
+}
+
+bool IsCpuFavoriteDefault(const SensorValue& sensor) noexcept {
+    if (sensor.kind != SensorKind::temperature) return false;
+    const std::wstring_view name{sensor.name.data()};
+    return Contains(name, L"Tctl/Tdie") || Contains(name, L"CPU Package");
+}
+
+bool IsGpuCoreFavoriteDefault(const SensorValue& sensor) noexcept {
+    return sensor.kind == SensorKind::temperature && Contains(sensor.name.data(), L"GPU Core temperature");
+}
+
+bool IsGpuMemoryFavoriteDefault(const SensorValue& sensor) noexcept {
+    return sensor.kind == SensorKind::temperature && Contains(sensor.name.data(), L"Memory Junction");
+}
+
 } // namespace
 
 SensorSection ClassifySensor(const SensorValue& sensor) noexcept {
@@ -77,21 +95,48 @@ std::uint32_t SensorSectionColor(const SensorSection section, const AppSettings&
     return color == AppSettings::kMatchAccentColor ? settings.text_color_rgb : color & 0xFFFFFFU;
 }
 
+bool InitializeDefaultFavorites(const SensorSnapshot& snapshot, AppSettings& settings) noexcept {
+    if (settings.favorites_initialized || snapshot.count == 0U) return false;
+    bool cpu_added = false;
+    bool gpu_added = false;
+    bool memory_added = false;
+    for (std::uint32_t index = 0U; index < snapshot.count; ++index) {
+        const auto& sensor = snapshot.sensors[index];
+        if (!cpu_added && (settings.easy_temperature_mask & easy_cpu_package) != 0U && IsCpuFavoriteDefault(sensor)) {
+            static_cast<void>(settings.AddFavorite(sensor.id));
+            cpu_added = true;
+        } else if (!gpu_added && (settings.easy_temperature_mask & easy_gpu_core) != 0U && IsGpuCoreFavoriteDefault(sensor)) {
+            static_cast<void>(settings.AddFavorite(sensor.id));
+            gpu_added = true;
+        } else if (!memory_added && (settings.easy_temperature_mask & easy_gpu_memory_junction) != 0U && IsGpuMemoryFavoriteDefault(sensor)) {
+            static_cast<void>(settings.AddFavorite(sensor.id));
+            memory_added = true;
+        }
+    }
+    settings.favorites_initialized = true;
+    return true;
+}
+
 SensorView BuildSensorView(
     const SensorSnapshot& snapshot,
     const std::uint32_t collapsed_sections,
     const std::wstring_view query,
-    const bool show_unavailable_cpu_temperature) noexcept {
+    const bool show_unavailable_cpu_temperature,
+    const AppSettings* const settings) noexcept {
     SensorView view{};
+    const auto favorites_only = settings != nullptr && settings->favorites_only;
     for (std::uint32_t raw_section = 0U; raw_section < static_cast<std::uint32_t>(SensorSection::count); ++raw_section) {
         const auto section = static_cast<SensorSection>(raw_section);
         std::uint16_t matching_count{};
+        std::uint16_t unfiltered_matching_count{};
         for (std::uint32_t index = 0U; index < snapshot.count; ++index) {
-            if (ClassifySensor(snapshot.sensors[index]) == section && Matches(snapshot.sensors[index], query)) ++matching_count;
+            if (ClassifySensor(snapshot.sensors[index]) != section || !Matches(snapshot.sensors[index], query)) continue;
+            ++unfiltered_matching_count;
+            if (!favorites_only || settings->IsFavorite(snapshot.sensors[index].id)) ++matching_count;
         }
         const auto cpu_placeholder = show_unavailable_cpu_temperature
             && section == SensorSection::cpu_temperatures
-            && matching_count == 0U
+            && unfiltered_matching_count == 0U
             && query.empty();
         if (matching_count == 0U && !cpu_placeholder) continue;
         view.rows[view.count++] = SensorViewRow{section, 0U, matching_count, true, false};
@@ -102,7 +147,9 @@ SensorView BuildSensorView(
             continue;
         }
         for (std::uint32_t index = 0U; index < snapshot.count; ++index) {
-            if (ClassifySensor(snapshot.sensors[index]) != section || !Matches(snapshot.sensors[index], query)) continue;
+            if (ClassifySensor(snapshot.sensors[index]) != section
+                || !Matches(snapshot.sensors[index], query)
+                || (favorites_only && !settings->IsFavorite(snapshot.sensors[index].id))) continue;
             view.rows[view.count++] = SensorViewRow{section, static_cast<std::uint16_t>(index), 0U, false, false};
         }
     }

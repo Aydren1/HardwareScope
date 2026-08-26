@@ -1,5 +1,6 @@
 #include "hardwarescope/settings_window.hpp"
 #include "hardwarescope/app_commands.hpp"
+#include "hardwarescope/osd_model.hpp"
 #include "hardwarescope/ui_palette.hpp"
 #include "hardwarescope/update_coordinator.hpp"
 
@@ -79,10 +80,6 @@ struct DialogState final {
     HWND spacing{};
     HWND separators{};
     HWND background{};
-    HWND easy_enabled{};
-    HWND easy_cpu{};
-    HWND easy_gpu{};
-    HWND easy_memory{};
     HWND fps_enabled{};
     HWND fps_game_only{};
     HWND fps_separate_position{};
@@ -555,29 +552,26 @@ void BuildControls(DialogState& state) {
     state.separators = Check(state, L"Separate CPU, GPU, memory, and FPS groups with |", state.draft.osd_group_separators, 418, 1);
     state.background = Check(state, L"Draw a translucent background behind the OSD", state.draft.osd_background, 454, 1);
 
-    state.easy_enabled = Check(state, L"Enable EZ Temp selection", state.draft.easy_temperature_enabled, 78, 2);
-    state.easy_cpu = Check(state, L"CPU Tctl/Tdie", (state.draft.easy_temperature_mask & easy_cpu_package) != 0U, 110, 2, 64, 170);
-    state.easy_gpu = Check(state, L"GPU core", (state.draft.easy_temperature_mask & easy_gpu_core) != 0U, 140, 2, 64, 170);
-    state.easy_memory = Check(state, L"GPU memory junction", (state.draft.easy_temperature_mask & easy_gpu_memory_junction) != 0U, 170, 2, 64, 210);
-    state.fps_enabled = Check(state, L"Enable game FPS monitoring", state.draft.fps_enabled, 206, 2);
-    state.fps_game_only = Check(state, L"Show FPS only while a game is running", state.draft.fps_game_only, 238, 2);
-    Label(state, L"FPS refresh", 272, 2);
-    state.fps_refresh = Combo(state, 272, 2, {{L"50 ms", 50U}, {L"100 ms", 100U}, {L"200 ms", 200U}, {L"250 ms", 250U}, {L"500 ms", 500U}}, state.draft.fps_refresh_interval_ms);
-    Label(state, L"FPS smoothing", 312, 2);
-    state.fps_smoothing = Combo(state, 312, 2, {{L"250 ms", 250U}, {L"500 ms", 500U}, {L"750 ms", 750U}, {L"1 second", 1'000U}, {L"1.25 seconds", 1'250U}}, state.draft.fps_smoothing_interval_ms);
-    Label(state, L"FPS scale", 352, 2);
-    state.fps_scale = Combo(state, 352, 2, {{L"50%", 50U}, {L"75%", 75U}, {L"100%", 100U}, {L"125%", 125U}, {L"150%", 150U}, {L"200%", 200U}, {L"250%", 250U}, {L"300%", 300U}}, state.draft.fps_scale_percent);
-    Label(state, L"Additional OSD sensors", 394, 2, 42, 220);
-    state.sensor_list = AddControl(state, L"LISTBOX", L"", LBS_EXTENDEDSEL | LBS_NOINTEGRALHEIGHT | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS | WS_BORDER | WS_VSCROLL | WS_TABSTOP, 270, 390, 350, 168, 0, 2);
+    state.fps_enabled = Check(state, L"Enable game FPS monitoring", state.draft.fps_enabled, 82, 2);
+    state.fps_game_only = Check(state, L"Show FPS only while a game is running", state.draft.fps_game_only, 114, 2);
+    Label(state, L"FPS refresh", 154, 2);
+    state.fps_refresh = Combo(state, 154, 2, {{L"50 ms", 50U}, {L"100 ms", 100U}, {L"200 ms", 200U}, {L"250 ms", 250U}, {L"500 ms", 500U}}, state.draft.fps_refresh_interval_ms);
+    Label(state, L"FPS smoothing", 194, 2);
+    state.fps_smoothing = Combo(state, 194, 2, {{L"250 ms", 250U}, {L"500 ms", 500U}, {L"750 ms", 750U}, {L"1 second", 1'000U}, {L"1.25 seconds", 1'250U}}, state.draft.fps_smoothing_interval_ms);
+    Label(state, L"FPS scale", 234, 2);
+    state.fps_scale = Combo(state, 234, 2, {{L"50%", 50U}, {L"75%", 75U}, {L"100%", 100U}, {L"125%", 125U}, {L"150%", 150U}, {L"200%", 200U}, {L"250%", 250U}, {L"300%", 300U}}, state.draft.fps_scale_percent);
+    Label(state, L"Sensors shown in the OSD", 286, 2, 42, 220);
+    state.sensor_list = AddControl(state, L"LISTBOX", L"", LBS_EXTENDEDSEL | LBS_NOINTEGRALHEIGHT | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS | WS_BORDER | WS_VSCROLL | WS_TABSTOP, 270, 282, 350, 276, 0, 2);
     SendMessageW(state.sensor_list, LB_SETITEMHEIGHT, 0U, Scale(state, 28));
     for (std::uint32_t index = 0U; state.snapshot != nullptr && index < state.snapshot->count; ++index) {
         const auto& sensor = state.snapshot->sensors[index];
+        if (sensor.kind == SensorKind::frame_rate) continue;
         std::wstring label = sensor.name.data();
         label += L"  —  ";
         label += sensor.hardware.data();
         const auto item = SendMessageW(state.sensor_list, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str()));
         SendMessageW(state.sensor_list, LB_SETITEMDATA, static_cast<WPARAM>(item), static_cast<LPARAM>(index));
-        if (state.draft.IsSensorPinned(sensor.id)) SendMessageW(state.sensor_list, LB_SETSEL, TRUE, item);
+        if (IsSensorSelectedForOsd(sensor, state.draft)) SendMessageW(state.sensor_list, LB_SETSEL, TRUE, item);
     }
 
     const auto category_choices = ColorChoices(true);
@@ -617,10 +611,8 @@ void ReadControls(DialogState& state) noexcept {
     state.draft.osd_spacing_px = ComboValue(state.spacing, state.draft.osd_spacing_px);
     state.draft.osd_group_separators = Checked(state.separators);
     state.draft.osd_background = Checked(state.background);
-    state.draft.easy_temperature_enabled = Checked(state.easy_enabled);
-    state.draft.easy_temperature_mask = (Checked(state.easy_cpu) ? easy_cpu_package : 0U)
-        | (Checked(state.easy_gpu) ? easy_gpu_core : 0U)
-        | (Checked(state.easy_memory) ? easy_gpu_memory_junction : 0U);
+    state.draft.easy_temperature_enabled = false;
+    state.draft.easy_temperature_mask = 0U;
     state.draft.fps_enabled = Checked(state.fps_enabled);
     state.draft.fps_game_only = Checked(state.fps_game_only);
     state.draft.fps_separate_position = Checked(state.fps_separate_position);

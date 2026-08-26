@@ -171,6 +171,14 @@ void TestSettingsStore() {
     settings.skipped_update_minor = 1U;
     settings.skipped_update_patch = 7U;
     settings.collapsed_sections = 0x15U;
+    settings.favorites_only = false;
+    settings.favorites_initialized = true;
+    Expect(settings.AddFavorite(31U), "first favorite sensor can be added");
+    Expect(settings.AddFavorite(44U), "second favorite sensor can be added");
+    Expect(!settings.AddFavorite(31U), "duplicate favorite sensor is rejected");
+    Expect(settings.RemoveFavorite(31U) && !settings.IsFavorite(31U), "favorite sensor can be removed");
+    Expect(!settings.RemoveFavorite(99U), "removing an unknown favorite is a no-op");
+    Expect(settings.AddFavorite(31U), "removed favorite can be added again");
     Expect(settings.PinSensor(10U), "first sensor can be pinned");
     Expect(settings.PinSensor(22U), "second sensor can be pinned");
     Expect(!settings.PinSensor(10U), "duplicate pinned sensor is rejected");
@@ -207,6 +215,8 @@ void TestSettingsStore() {
     Expect(loaded.skipped_update_major == 2U && loaded.skipped_update_minor == 1U && loaded.skipped_update_patch == 7U,
         "skipped update version round-trips");
     Expect(loaded.collapsed_sections == 0x15U, "collapsed sensor sections round-trip");
+    Expect(!loaded.favorites_only && loaded.favorites_initialized, "Favorites view state round-trips");
+    Expect(loaded.favorite_sensor_count == 2U && loaded.IsFavorite(31U) && loaded.IsFavorite(44U), "favorite sensor IDs round-trip");
     Expect(loaded.pinned_sensor_count == 2U && loaded.IsSensorPinned(10U) && loaded.IsSensorPinned(22U), "pinned sensor IDs round-trip");
     loaded.refresh_interval_ms = 333U;
     Expect(store.Save(loaded), "a changed millisecond polling interval saves successfully");
@@ -500,6 +510,33 @@ void TestSensorViewModel() {
     const auto filtered = hardwarescope::BuildSensorView(snapshot, 0xFFFFFFFFU, L"geforce");
     Expect(filtered.count == 2U && filtered.rows[0].is_section && !filtered.rows[1].is_section && filtered.rows[1].sensor_index == 2U,
         "search filters names and hardware case-insensitively and temporarily expands matches");
+
+    hardwarescope::AppSettings favorites{};
+    favorites.favorites_initialized = true;
+    Expect(favorites.AddFavorite(snapshot.sensors[0].id) && favorites.AddFavorite(snapshot.sensors[2].id), "sensors can be added to Favorites");
+    const auto favorites_view = hardwarescope::BuildSensorView(snapshot, 0U, L"", false, &favorites);
+    Expect(favorites_view.count == 4U
+            && favorites_view.rows[0].is_section
+            && favorites_view.rows[1].sensor_index == 0U
+            && favorites_view.rows[2].is_section
+            && favorites_view.rows[3].sensor_index == 2U,
+        "Favorites view keeps section organization while hiding unstarred sensors");
+    Expect(favorites.RemoveFavorite(snapshot.sensors[0].id), "a default CPU favorite can be removed");
+    const auto without_cpu_favorite = hardwarescope::BuildSensorView(snapshot, 0U, L"", true, &favorites);
+    Expect(without_cpu_favorite.count == 2U
+            && without_cpu_favorite.rows[0].section == hardwarescope::SensorSection::graphics,
+        "removing a CPU favorite does not create a false unavailable-temperature placeholder");
+    favorites.favorites_only = false;
+    const auto all_view = hardwarescope::BuildSensorView(snapshot, 0U, L"", false, &favorites);
+    Expect(all_view.count == expanded.count, "turning off Favorites restores the complete sensor list");
+
+    hardwarescope::AppSettings defaults{};
+    Expect(hardwarescope::InitializeDefaultFavorites(snapshot, defaults), "first sensor snapshot initializes recommended Favorites");
+    Expect(defaults.favorites_initialized && defaults.favorite_sensor_count == 2U
+            && defaults.IsFavorite(snapshot.sensors[0].id)
+            && defaults.IsFavorite(snapshot.sensors[2].id),
+        "CPU package and GPU core temperatures become initial Favorites when available");
+    Expect(!hardwarescope::InitializeDefaultFavorites(snapshot, defaults), "recommended Favorites initialize only once");
 
     hardwarescope::SensorSnapshot missing_cpu_temperature{};
     missing_cpu_temperature.count = 1U;

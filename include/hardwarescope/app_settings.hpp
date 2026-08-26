@@ -32,8 +32,9 @@ enum EasyTemperature : std::uint32_t {
 };
 
 struct AppSettings final {
-    static constexpr std::uint32_t kSchemaVersion = 2U;
+    static constexpr std::uint32_t kSchemaVersion = 3U;
     static constexpr std::size_t kMaximumPinnedSensors = 64U;
+    static constexpr std::size_t kMaximumFavoriteSensors = 64U;
     static constexpr std::uint32_t kMatchAccentColor = 0x01000000U;
 
     std::uint32_t refresh_interval_ms{750U};
@@ -80,6 +81,11 @@ struct AppSettings final {
     std::uint32_t skipped_update_patch{};
     std::uint32_t collapsed_sections{};
 
+    bool favorites_only{true};
+    bool favorites_initialized{};
+    std::array<std::uint64_t, kMaximumFavoriteSensors> favorite_sensor_ids{};
+    std::uint32_t favorite_sensor_count{};
+
     std::array<std::uint64_t, kMaximumPinnedSensors> pinned_sensor_ids{};
     std::uint32_t pinned_sensor_count{};
 
@@ -87,6 +93,9 @@ struct AppSettings final {
     [[nodiscard]] bool PinSensor(std::uint64_t sensor_id) noexcept;
     [[nodiscard]] bool UnpinSensor(std::uint64_t sensor_id) noexcept;
     [[nodiscard]] bool IsSensorPinned(std::uint64_t sensor_id) const noexcept;
+    [[nodiscard]] bool AddFavorite(std::uint64_t sensor_id) noexcept;
+    [[nodiscard]] bool RemoveFavorite(std::uint64_t sensor_id) noexcept;
+    [[nodiscard]] bool IsFavorite(std::uint64_t sensor_id) const noexcept;
 };
 
 class SettingsStore final {

@@ -39,10 +39,12 @@ struct SensorView final {
 [[nodiscard]] SensorSection ClassifySensor(const SensorValue& sensor) noexcept;
 [[nodiscard]] const wchar_t* SensorSectionName(SensorSection section) noexcept;
 [[nodiscard]] std::uint32_t SensorSectionColor(SensorSection section, const AppSettings& settings) noexcept;
+[[nodiscard]] bool InitializeDefaultFavorites(const SensorSnapshot& snapshot, AppSettings& settings) noexcept;
 [[nodiscard]] SensorView BuildSensorView(
     const SensorSnapshot& snapshot,
     std::uint32_t collapsed_sections,
     std::wstring_view query,
-    bool show_unavailable_cpu_temperature = false) noexcept;
+    bool show_unavailable_cpu_temperature = false,
+    const AppSettings* settings = nullptr) noexcept;
 
 } // namespace hardwarescope
