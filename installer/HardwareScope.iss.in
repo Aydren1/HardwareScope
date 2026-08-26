@@ -50,6 +50,7 @@ WizardStyle=modern
 Source: "{#BuildDirectory}/HardwareScopeNative.exe"; DestDir: "{app}"; DestName: "HardwareScope.exe"; Flags: ignoreversion
 Source: "{#BuildDirectory}/HardwareScopeNativeUpdater.exe"; DestDir: "{app}"; DestName: "HardwareScopeUpdater.exe"; Flags: ignoreversion
 Source: "{#BuildDirectory}/HardwareScopeNativeSensorService.exe"; DestDir: "{app}"; DestName: "HardwareScopeSensorService.exe"; Flags: ignoreversion
+Source: "{#SourceDirectory}/resources/HardwareScope.ico"; DestDir: "{app}"; DestName: "HardwareScope.ico"; Flags: ignoreversion
 Source: "@CMAKE_CURRENT_SOURCE_DIR@/third_party/presentmon/PresentMon-2.4.1-x64.exe"; DestDir: "{app}"; DestName: "PresentMon.exe"; Flags: ignoreversion
 Source: "@CMAKE_CURRENT_SOURCE_DIR@/LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "@CMAKE_CURRENT_SOURCE_DIR@/THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
@@ -58,13 +59,13 @@ Source: "@CMAKE_CURRENT_SOURCE_DIR@/CODE_SIGNING_POLICY.md"; DestDir: "{app}"; F
 
 [Icons]
 #ifdef SmokeTest
-Name: "{app}\HardwareScope smoke shortcut"; Filename: "{app}\HardwareScope.exe"; WorkingDir: "{app}"
+Name: "{app}\HardwareScope smoke shortcut"; Filename: "{app}\HardwareScope.exe"; WorkingDir: "{app}"; IconFilename: "{app}\HardwareScope.ico"
 #else
 #ifdef AdminSmokeTest
-Name: "{app}\HardwareScope admin smoke shortcut"; Filename: "{app}\HardwareScope.exe"; WorkingDir: "{app}"
+Name: "{app}\HardwareScope admin smoke shortcut"; Filename: "{app}\HardwareScope.exe"; WorkingDir: "{app}"; IconFilename: "{app}\HardwareScope.ico"
 #else
-Name: "{autodesktop}\HardwareScope"; Filename: "{app}\HardwareScope.exe"; WorkingDir: "{app}"
-Name: "{group}\HardwareScope"; Filename: "{app}\HardwareScope.exe"; WorkingDir: "{app}"
+Name: "{autodesktop}\HardwareScope"; Filename: "{app}\HardwareScope.exe"; WorkingDir: "{app}"; IconFilename: "{app}\HardwareScope.ico"
+Name: "{group}\HardwareScope"; Filename: "{app}\HardwareScope.exe"; WorkingDir: "{app}"; IconFilename: "{app}\HardwareScope.ico"
 Name: "{group}\Uninstall HardwareScope"; Filename: "{uninstallexe}"
 #endif
 #endif
