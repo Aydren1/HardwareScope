@@ -95,11 +95,15 @@ jobs:
           )
           foreach ($metadataFile in $metadataFiles) {
             $metadata = (Get-Item -LiteralPath $metadataFile).VersionInfo
-            if ($metadata.ProductName -ne 'HardwareScope') {
-              throw "Unexpected product name in ${metadataFile}: $($metadata.ProductName)"
+            # Inno Setup's Windows version resource can expose trailing NUL or
+            # whitespace characters through FileVersionInfo on some runners.
+            $productName = ([string]$metadata.ProductName).Trim([char]0).Trim()
+            $productVersion = ([string]$metadata.ProductVersion).Trim([char]0).Trim()
+            if ($productName -ne 'HardwareScope') {
+              throw "Unexpected product name in ${metadataFile}: [$productName]"
             }
-            if ($metadata.ProductVersion -ne $version) {
-              throw "Unexpected product version in ${metadataFile}: $($metadata.ProductVersion)"
+            if ($productVersion -ne $version -and $productVersion -ne "$version.0") {
+              throw "Unexpected product version in ${metadataFile}: [$productVersion]"
             }
           }
 
