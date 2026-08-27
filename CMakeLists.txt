@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.28)
 
-project(HardwareScopeNative VERSION 2.0.5 LANGUAGES CXX RC)
+project(HardwareScopeNative VERSION 2.0.6 LANGUAGES CXX RC)
 
 configure_file(installer/HardwareScope.iss.in HardwareScope.iss @ONLY)
 configure_file(resources/HardwareScopeVersion.rc.in HardwareScopeVersion.rc @ONLY)
@@ -82,6 +82,7 @@ function(add_hardwarescope_app target_name internal_test_hooks)
         comctl32
         ole32
         gdi32
+        comdlg32
         windowscodecs
     )
     target_compile_definitions(${target_name} PRIVATE

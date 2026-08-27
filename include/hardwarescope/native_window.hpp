@@ -79,6 +79,7 @@ private:
     void ShowTrayMenu() noexcept;
     void HandleCommand(int command) noexcept;
     void ShowSettings() noexcept;
+    void ShowFirstRunSetup() noexcept;
     void ScheduleAutomaticUpdateCheck(std::uint32_t default_delay_ms = 5'000U) noexcept;
     bool ShowUpdateNotification(const UpdateCompletion& completion) noexcept;
     void PromptForUpdate(const UpdateCompletion& completion) noexcept;
@@ -109,6 +110,7 @@ private:
     UINT taskbar_created_message_{};
     bool tray_icon_added_{};
     bool suspended_{};
+    bool first_run_{};
     bool resume_waiting_for_snapshot_{};
     std::optional<UpdateCompletion> pending_update_{};
     SnapshotStore snapshots_{};

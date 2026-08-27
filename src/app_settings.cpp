@@ -111,6 +111,7 @@ void WriteColor(std::ostream& stream, const char* key, const std::uint32_t color
 
 void AppSettings::Normalize() noexcept {
     refresh_interval_ms = std::clamp(refresh_interval_ms, 100U, 10'000U);
+    interface_text_scale_percent = std::clamp(interface_text_scale_percent, 100U, 130U);
     text_color_rgb &= 0xFFFFFFU;
     NormalizeCategoryColor(cpu_temperature_color_rgb);
     NormalizeCategoryColor(cpu_usage_color_rgb);
@@ -193,6 +194,8 @@ bool SettingsStore::Load(AppSettings& destination) const noexcept {
         if (!stream) return false;
         const std::string text{std::istreambuf_iterator<char>{stream}, std::istreambuf_iterator<char>{}};
         const auto values = Parse(text);
+        const auto schema_version = IntegerValue<std::uint32_t>(values, "schema_version", 0U);
+        if (schema_version == 0U || schema_version > AppSettings::kSchemaVersion) return false;
 
         AppSettings loaded{};
         loaded.refresh_interval_ms = IntegerValue(values, "refresh_interval_ms", loaded.refresh_interval_ms);
@@ -206,6 +209,9 @@ bool SettingsStore::Load(AppSettings& destination) const noexcept {
         loaded.storage_color_rgb = IntegerValue(values, "storage_color_rgb", loaded.storage_color_rgb, 16);
         loaded.memory_color_rgb = IntegerValue(values, "memory_color_rgb", loaded.memory_color_rgb, 16);
         loaded.system_color_rgb = IntegerValue(values, "system_color_rgb", loaded.system_color_rgb, 16);
+        loaded.interface_text_scale_percent = IntegerValue(values, "interface_text_scale_percent", loaded.interface_text_scale_percent);
+        loaded.high_contrast = BooleanValue(values, "high_contrast", loaded.high_contrast);
+        loaded.onboarding_completed = BooleanValue(values, "onboarding_completed", true);
         loaded.start_with_windows = BooleanValue(values, "start_with_windows", loaded.start_with_windows);
         loaded.start_minimized = BooleanValue(values, "start_minimized", loaded.start_minimized);
         loaded.show_osd = BooleanValue(values, "show_osd", loaded.show_osd);
@@ -268,6 +274,9 @@ bool SettingsStore::Save(const AppSettings& settings) const noexcept {
         WriteColor(stream, "storage_color_rgb", normalized.storage_color_rgb);
         WriteColor(stream, "memory_color_rgb", normalized.memory_color_rgb);
         WriteColor(stream, "system_color_rgb", normalized.system_color_rgb);
+        stream << "interface_text_scale_percent=" << normalized.interface_text_scale_percent << '\n';
+        WriteBoolean(stream, "high_contrast", normalized.high_contrast);
+        WriteBoolean(stream, "onboarding_completed", normalized.onboarding_completed);
         WriteBoolean(stream, "start_with_windows", normalized.start_with_windows);
         WriteBoolean(stream, "start_minimized", normalized.start_minimized);
         WriteBoolean(stream, "show_osd", normalized.show_osd);

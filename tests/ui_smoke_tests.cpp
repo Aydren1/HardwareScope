@@ -428,13 +428,18 @@ int wmain(const int argument_count, wchar_t** arguments) {
     const auto first_combo = FindWindowExW(settings, nullptr, WC_COMBOBOXW, nullptr);
     const auto sensor_list = FindWindowExW(settings, nullptr, L"LISTBOX", nullptr);
     const auto update_button = GetDlgItem(settings, hardwarescope::kSettingsCheckUpdatesCommand);
-    if (tabs == nullptr || first_combo == nullptr || sensor_list == nullptr || update_button == nullptr || TabCtrl_GetItemCount(tabs) != 4
+    const auto export_button = GetDlgItem(settings, hardwarescope::kSettingsExportCommand);
+    const auto import_button = GetDlgItem(settings, hardwarescope::kSettingsImportCommand);
+    if (tabs == nullptr || first_combo == nullptr || sensor_list == nullptr || update_button == nullptr
+        || export_button == nullptr || import_button == nullptr || TabCtrl_GetItemCount(tabs) != 4
         || (GetWindowLongPtrW(settings, GWL_STYLE) & WS_CLIPCHILDREN) == 0
         || (GetWindowLongPtrW(tabs, GWL_STYLE) & TCS_OWNERDRAWFIXED) == 0
         || (GetWindowLongPtrW(first_combo, GWL_STYLE) & CBS_OWNERDRAWFIXED) == 0
         || (GetWindowLongPtrW(sensor_list, GWL_STYLE) & LBS_OWNERDRAWFIXED) == 0
-        || (GetWindowLongPtrW(update_button, GWL_STYLE) & BS_OWNERDRAW) == 0) {
-        std::cerr << "FAIL: settings pages or configurable OSD sensor list are missing\n";
+        || (GetWindowLongPtrW(update_button, GWL_STYLE) & BS_OWNERDRAW) == 0
+        || (GetWindowLongPtrW(export_button, GWL_STYLE) & BS_OWNERDRAW) == 0
+        || (GetWindowLongPtrW(import_button, GWL_STYLE) & BS_OWNERDRAW) == 0) {
+        std::cerr << "FAIL: settings pages, import/export, or configurable OSD sensor list are missing\n";
         return 1;
     }
     RECT tab_client{};

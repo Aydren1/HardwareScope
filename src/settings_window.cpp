@@ -5,6 +5,7 @@
 #include "hardwarescope/update_coordinator.hpp"
 
 #include <commctrl.h>
+#include <commdlg.h>
 #include <dwmapi.h>
 #include <uxtheme.h>
 #include <windowsx.h>
@@ -12,6 +13,8 @@
 #include <algorithm>
 #include <array>
 #include <cstdlib>
+#include <filesystem>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -68,10 +71,14 @@ struct DialogState final {
     HWND theme{};
     HWND color{};
     HWND refresh{};
+    HWND text_scale{};
+    HWND high_contrast{};
     HWND start_windows{};
     HWND start_minimized{};
     HWND updates{};
     HWND check_updates{};
+    HWND export_settings{};
+    HWND import_settings{};
     HWND show_osd{};
     HWND position{};
     HWND layout{};
@@ -337,6 +344,16 @@ std::uint32_t ComboValue(const HWND combo, const std::uint32_t fallback) noexcep
     return value == CB_ERR ? fallback : static_cast<std::uint32_t>(value);
 }
 
+void SelectComboValue(const HWND combo, const std::uint32_t value) noexcept {
+    const auto count = static_cast<int>(SendMessageW(combo, CB_GETCOUNT, 0, 0));
+    for (int index = 0; index < count; ++index) {
+        if (static_cast<std::uint32_t>(SendMessageW(combo, CB_GETITEMDATA, index, 0)) == value) {
+            SendMessageW(combo, CB_SETCURSEL, index, 0);
+            return;
+        }
+    }
+}
+
 bool Checked(const HWND control) noexcept { return SendMessageW(control, BM_GETCHECK, 0, 0) == BST_CHECKED; }
 
 std::vector<std::pair<const wchar_t*, std::uint32_t>> ColorChoices(const bool include_match_accent) {
@@ -390,8 +407,9 @@ void ShowPage(DialogState& state, const int page) noexcept {
 }
 
 void RecreateFont(DialogState& state) noexcept {
+    const auto logical_height = MulDiv(17, static_cast<int>(state.draft.interface_text_scale_percent), 100);
     const auto next = CreateFontW(
-        -Scale(state, 17),
+        -Scale(state, logical_height),
         0,
         0,
         0,
@@ -534,6 +552,12 @@ void BuildControls(DialogState& state) {
     state.start_minimized = Check(state, L"Start minimized to the notification tray", state.draft.start_minimized, 254, 0);
     state.updates = Check(state, L"Automatically check for stable updates", state.draft.automatic_updates, 306, 0);
     state.check_updates = PushButton(state, L"Check for updates", 42, 358, 180, 36, kSettingsCheckUpdatesCommand, 0);
+    Label(state, L"Interface text size", 414, 0);
+    state.text_scale = Combo(state, 414, 0, {{L"Standard — 100%", 100U}, {L"Large — 115%", 115U}, {L"Extra large — 130%", 130U}}, state.draft.interface_text_scale_percent);
+    state.high_contrast = Check(state, L"Use stronger contrast for text, borders, and selections", state.draft.high_contrast, 454, 0);
+    Label(state, L"Keyboard: Ctrl+F search   •   Ctrl+, settings   •   Esc clear search", 494, 0, 42, 590);
+    state.export_settings = PushButton(state, L"Export settings", 42, 548, 180, 36, kSettingsExportCommand, 0);
+    state.import_settings = PushButton(state, L"Import settings", 234, 548, 180, 36, kSettingsImportCommand, 0);
 
     state.show_osd = Check(state, L"Show the on-screen display", state.draft.show_osd, 82, 1);
     Label(state, L"Telemetry corner", 126, 1);
@@ -600,6 +624,9 @@ void ReadControls(DialogState& state) noexcept {
     state.draft.theme = static_cast<Theme>(ComboValue(state.theme, 0U));
     state.draft.text_color_rgb = ComboValue(state.color, state.draft.text_color_rgb);
     state.draft.refresh_interval_ms = ComboValue(state.refresh, state.draft.refresh_interval_ms);
+    state.draft.interface_text_scale_percent = ComboValue(state.text_scale, state.draft.interface_text_scale_percent);
+    state.draft.high_contrast = Checked(state.high_contrast);
+    state.draft.onboarding_completed = true;
     state.draft.start_with_windows = Checked(state.start_windows);
     state.draft.start_minimized = Checked(state.start_minimized);
     state.draft.automatic_updates = Checked(state.updates);
@@ -629,15 +656,75 @@ void ReadControls(DialogState& state) noexcept {
     state.draft.storage_color_rgb = ComboValue(state.section_colors[5], state.draft.storage_color_rgb);
     state.draft.memory_color_rgb = ComboValue(state.section_colors[6], state.draft.memory_color_rgb);
     state.draft.system_color_rgb = ComboValue(state.section_colors[7], state.draft.system_color_rgb);
-    state.draft.pinned_sensor_ids = {};
-    state.draft.pinned_sensor_count = 0U;
     const auto count = static_cast<int>(SendMessageW(state.sensor_list, LB_GETCOUNT, 0, 0));
-    for (int item = 0; item < count && state.draft.pinned_sensor_count < state.draft.pinned_sensor_ids.size(); ++item) {
-        if (SendMessageW(state.sensor_list, LB_GETSEL, item, 0) <= 0) continue;
-        const auto sensor_index = static_cast<std::uint32_t>(SendMessageW(state.sensor_list, LB_GETITEMDATA, item, 0));
-        if (state.snapshot != nullptr && sensor_index < state.snapshot->count) state.draft.pinned_sensor_ids[state.draft.pinned_sensor_count++] = state.snapshot->sensors[sensor_index].id;
+    if (count > 0) {
+        state.draft.pinned_sensor_ids = {};
+        state.draft.pinned_sensor_count = 0U;
+        for (int item = 0; item < count && state.draft.pinned_sensor_count < state.draft.pinned_sensor_ids.size(); ++item) {
+            if (SendMessageW(state.sensor_list, LB_GETSEL, item, 0) <= 0) continue;
+            const auto sensor_index = static_cast<std::uint32_t>(SendMessageW(state.sensor_list, LB_GETITEMDATA, item, 0));
+            if (state.snapshot != nullptr && sensor_index < state.snapshot->count) state.draft.pinned_sensor_ids[state.draft.pinned_sensor_count++] = state.snapshot->sensors[sensor_index].id;
+        }
     }
     state.draft.Normalize();
+}
+
+void ApplyDraftToControls(DialogState& state) noexcept {
+    SelectComboValue(state.theme, static_cast<std::uint32_t>(state.draft.theme));
+    SelectComboValue(state.color, state.draft.text_color_rgb);
+    SelectComboValue(state.refresh, state.draft.refresh_interval_ms);
+    SelectComboValue(state.text_scale, state.draft.interface_text_scale_percent);
+    SendMessageW(state.high_contrast, BM_SETCHECK, state.draft.high_contrast ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(state.start_windows, BM_SETCHECK, state.draft.start_with_windows ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(state.start_minimized, BM_SETCHECK, state.draft.start_minimized ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(state.updates, BM_SETCHECK, state.draft.automatic_updates ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(state.show_osd, BM_SETCHECK, state.draft.show_osd ? BST_CHECKED : BST_UNCHECKED, 0);
+    SelectComboValue(state.position, static_cast<std::uint32_t>(state.draft.osd_position));
+    SelectComboValue(state.layout, static_cast<std::uint32_t>(state.draft.osd_layout));
+    SelectComboValue(state.opacity, state.draft.osd_opacity_percent);
+    SelectComboValue(state.scale, state.draft.osd_scale_percent);
+    SelectComboValue(state.spacing, state.draft.osd_spacing_px);
+    SendMessageW(state.separators, BM_SETCHECK, state.draft.osd_group_separators ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(state.background, BM_SETCHECK, state.draft.osd_background ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(state.fps_enabled, BM_SETCHECK, state.draft.fps_enabled ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(state.fps_game_only, BM_SETCHECK, state.draft.fps_game_only ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(state.fps_separate_position, BM_SETCHECK, state.draft.fps_separate_position ? BST_CHECKED : BST_UNCHECKED, 0);
+    SelectComboValue(state.fps_position, static_cast<std::uint32_t>(state.draft.fps_osd_position));
+    SelectComboValue(state.fps_refresh, state.draft.fps_refresh_interval_ms);
+    SelectComboValue(state.fps_smoothing, state.draft.fps_smoothing_interval_ms);
+    SelectComboValue(state.fps_color, state.draft.fps_color_rgb);
+    SelectComboValue(state.fps_scale, state.draft.fps_scale_percent);
+    const std::array<std::uint32_t, 8U> colors{
+        state.draft.cpu_temperature_color_rgb, state.draft.cpu_usage_color_rgb,
+        state.draft.cpu_clock_color_rgb, state.draft.cpu_power_color_rgb,
+        state.draft.graphics_color_rgb, state.draft.storage_color_rgb,
+        state.draft.memory_color_rgb, state.draft.system_color_rgb};
+    for (std::size_t index = 0U; index < colors.size(); ++index) SelectComboValue(state.section_colors[index], colors[index]);
+    const auto count = static_cast<int>(SendMessageW(state.sensor_list, LB_GETCOUNT, 0, 0));
+    for (int item = 0; item < count; ++item) {
+        const auto sensor_index = static_cast<std::uint32_t>(SendMessageW(state.sensor_list, LB_GETITEMDATA, item, 0));
+        const auto selected = state.snapshot != nullptr
+            && sensor_index < state.snapshot->count
+            && IsSensorSelectedForOsd(state.snapshot->sensors[sensor_index], state.draft);
+        SendMessageW(state.sensor_list, LB_SETSEL, selected ? TRUE : FALSE, item);
+    }
+}
+
+std::optional<std::filesystem::path> SelectSettingsPath(const HWND owner, const bool save) noexcept {
+    std::array<wchar_t, MAX_PATH> path{};
+    if (save) static_cast<void>(wcscpy_s(path.data(), path.size(), L"HardwareScope-settings.ini"));
+    constexpr wchar_t filter[] = L"HardwareScope settings (*.ini)\0*.ini\0All files (*.*)\0*.*\0\0";
+    OPENFILENAMEW dialog{};
+    dialog.lStructSize = sizeof(dialog);
+    dialog.hwndOwner = owner;
+    dialog.lpstrFilter = filter;
+    dialog.lpstrFile = path.data();
+    dialog.nMaxFile = static_cast<DWORD>(path.size());
+    dialog.lpstrDefExt = L"ini";
+    dialog.Flags = OFN_EXPLORER | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR
+        | (save ? OFN_OVERWRITEPROMPT : OFN_FILEMUSTEXIST);
+    const auto accepted = save ? GetSaveFileNameW(&dialog) : GetOpenFileNameW(&dialog);
+    return accepted ? std::optional<std::filesystem::path>{path.data()} : std::nullopt;
 }
 
 bool IsPushButton(const DialogState& state, const HWND control) noexcept {
@@ -738,12 +825,17 @@ void DrawOwnerItem(DialogState& state, const DRAWITEMSTRUCT& item) noexcept {
 void PreviewPalette(DialogState& state) noexcept {
     state.draft.theme = static_cast<Theme>(ComboValue(state.theme, static_cast<std::uint32_t>(state.draft.theme)));
     state.draft.text_color_rgb = ComboValue(state.color, state.draft.text_color_rgb);
-    state.palette = PaletteFor(state.draft.theme, state.draft.text_color_rgb);
+    state.draft.interface_text_scale_percent = ComboValue(state.text_scale, state.draft.interface_text_scale_percent);
+    state.draft.high_contrast = Checked(state.high_contrast);
+    state.palette = PaletteFor(state.draft.theme, state.draft.text_color_rgb, state.draft.high_contrast);
+    RecreateFont(state);
+    UpdateOwnerDrawMetrics(state);
     RecreateBrushes(state);
     for (const auto& record : state.paged_controls) StyleControl(state, record.window);
     const BOOL dark = state.draft.theme != Theme::light ? TRUE : FALSE;
     static_cast<void>(DwmSetWindowAttribute(state.window, 20U, &dark, sizeof(dark)));
     static_cast<void>(SetWindowTheme(state.window, state.draft.theme != Theme::light ? L"DarkMode_Explorer" : L"Explorer", nullptr));
+    Relayout(state);
     RedrawWindow(state.window, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_FRAME);
 }
 
@@ -821,8 +913,43 @@ LRESULT CALLBACK WindowProcedure(const HWND window, const UINT message, const WP
     }
     case WM_COMMAND:
         if (HIWORD(wparam) == CBN_SELCHANGE
-            && (reinterpret_cast<HWND>(lparam) == state->theme || reinterpret_cast<HWND>(lparam) == state->color)) {
+            && (reinterpret_cast<HWND>(lparam) == state->theme
+                || reinterpret_cast<HWND>(lparam) == state->color
+                || reinterpret_cast<HWND>(lparam) == state->text_scale)) {
             PreviewPalette(*state);
+            return 0;
+        }
+        if (HIWORD(wparam) == BN_CLICKED && reinterpret_cast<HWND>(lparam) == state->high_contrast) {
+            PreviewPalette(*state);
+            return 0;
+        }
+        if (LOWORD(wparam) == kSettingsExportCommand) {
+            if (const auto path = SelectSettingsPath(window, true)) {
+                ReadControls(*state);
+                const SettingsStore destination{*path};
+                const auto saved = destination.Save(state->draft);
+                MessageBoxW(
+                    window,
+                    saved ? L"Settings exported successfully." : L"HardwareScope could not write the selected file.",
+                    L"Export settings",
+                    MB_OK | (saved ? MB_ICONINFORMATION : MB_ICONWARNING));
+            }
+            return 0;
+        }
+        if (LOWORD(wparam) == kSettingsImportCommand) {
+            if (const auto path = SelectSettingsPath(window, false)) {
+                AppSettings imported{};
+                const SettingsStore source{*path};
+                if (!source.Load(imported)) {
+                    MessageBoxW(window, L"This is not a valid or supported HardwareScope settings file.", L"Import settings", MB_OK | MB_ICONWARNING);
+                    return 0;
+                }
+                imported.onboarding_completed = true;
+                state->draft = imported;
+                ApplyDraftToControls(*state);
+                PreviewPalette(*state);
+                MessageBoxW(window, L"Settings imported. Review them, then choose Save settings to apply.", L"Import settings", MB_OK | MB_ICONINFORMATION);
+            }
             return 0;
         }
         if (LOWORD(wparam) == kSettingsCheckUpdatesCommand) {
@@ -928,7 +1055,7 @@ bool ShowSettingsWindow(const HWND owner, AppSettings& settings, const SensorSna
     state.draft = settings;
     state.snapshot = &snapshot;
     state.dpi = owner_dpi;
-    state.palette = PaletteFor(state.draft.theme, state.draft.text_color_rgb);
+    state.palette = PaletteFor(state.draft.theme, state.draft.text_color_rgb, state.draft.high_contrast);
     RecreateFont(state);
     RecreateBrushes(state);
     MONITORINFO monitor_information{};

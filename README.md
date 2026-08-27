@@ -40,6 +40,10 @@ roles and release controls, and the [privacy policy](PRIVACY.md).
 - Compact OSD with corner placement, vertical or horizontal layout, spacing,
   opacity, and scaling controls
 - A simple Favorites view with one-click stars and automatic CPU/GPU temperature defaults
+- Portable settings import and export with format validation
+- A lightweight first-run setup with recommended or customizable configuration
+- Standard, large, and extra-large interface text plus an optional high-contrast palette
+- Keyboard shortcuts: `Ctrl+F` searches sensors, `Ctrl+,` opens Settings, and `Esc` clears search
 - Independent, game-only FPS capture and display settings
 - Minimize-to-tray behavior, startup options, and single-instance enforcement
 - Verified GitHub updates with installer size and SHA-256 validation

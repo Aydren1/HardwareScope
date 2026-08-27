@@ -216,13 +216,18 @@ NativeWindow::NativeWindow(const HINSTANCE instance) noexcept
       settings_store_(SettingsStore::DefaultPath()),
       osd_window_(instance, OsdWindowRole::primary),
       fps_osd_window_(instance, OsdWindowRole::fps) {
-    if (!settings_store_.Load(settings_)) {
+    const auto settings_loaded = settings_store_.Load(settings_);
+    if (!settings_loaded) {
         auto legacy_path = settings_store_.Path().parent_path();
         legacy_path /= L"settings.json";
-        if (MigrateLegacySettingsFile(legacy_path, settings_)) static_cast<void>(settings_store_.Save(settings_));
+        if (MigrateLegacySettingsFile(legacy_path, settings_)) {
+            settings_.onboarding_completed = true;
+            static_cast<void>(settings_store_.Save(settings_));
+        }
     }
+    first_run_ = !settings_.onboarding_completed;
     collapsed_sections_ = settings_.collapsed_sections;
-    palette_ = PaletteFor(settings_.theme, settings_.text_color_rgb);
+    palette_ = PaletteFor(settings_.theme, settings_.text_color_rgb, settings_.high_contrast);
     sensor_worker_.ConfigureFps(
         settings_.fps_enabled,
         settings_.fps_game_only,
@@ -250,6 +255,7 @@ int NativeWindow::Run(const int show_command) {
     if (!CreateNativeWindow(show_command)) return 13;
 
     sensor_worker_.Start(std::chrono::milliseconds{settings_.refresh_interval_ms});
+    if (first_run_) ShowFirstRunSetup();
     MSG message{};
     int result = 0;
     for (;;) {
@@ -314,7 +320,7 @@ bool NativeWindow::CreateNativeWindow(const int show_command) {
     static_cast<void>(AddTrayIcon());
     if (!osd_window_.Initialize(window_, settings_)) return false;
     if (!fps_osd_window_.Initialize(window_, settings_)) return false;
-    ScheduleAutomaticUpdateCheck();
+    if (!first_run_) ScheduleAutomaticUpdateCheck();
     if (settings_.start_minimized) {
         ShowWindow(window_, SW_HIDE);
     } else {
@@ -459,6 +465,26 @@ LRESULT NativeWindow::WindowProcedure(const UINT message, const WPARAM wparam, c
     case WM_CHAR:
         HandleCharacter(static_cast<wchar_t>(wparam));
         return 0;
+    case WM_KEYDOWN:
+        if ((GetKeyState(VK_CONTROL) & 0x8000) != 0 && wparam == 'F') {
+            search_active_ = true;
+            SetFocus(window_);
+            InvalidateRect(window_, nullptr, FALSE);
+            return 0;
+        }
+        if ((GetKeyState(VK_CONTROL) & 0x8000) != 0 && wparam == VK_OEM_COMMA) {
+            ShowSettings();
+            return 0;
+        }
+        if (wparam == VK_ESCAPE && (search_active_ || !search_text_.empty() || tooltip_visible_)) {
+            search_active_ = false;
+            search_text_.clear();
+            ClearHover();
+            scroll_offset_ = 0.0F;
+            InvalidateRect(window_, nullptr, FALSE);
+            return 0;
+        }
+        break;
     case WM_MOUSEMOVE:
         UpdateHover(POINT{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)});
         return 0;
@@ -657,11 +683,12 @@ bool NativeWindow::CreateDeviceResources() {
         DestroyIcon(icon);
     }
 
-    if (FAILED(dwrite_factory_->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 22.0F, L"en-US", title_format_.ReleaseAndGetAddressOf()))) return false;
-    if (FAILED(dwrite_factory_->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 11.0F, L"en-US", subtitle_format_.ReleaseAndGetAddressOf()))) return false;
-    if (FAILED(dwrite_factory_->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12.0F, L"en-US", body_format_.ReleaseAndGetAddressOf()))) return false;
-    if (FAILED(dwrite_factory_->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12.0F, L"en-US", value_format_.ReleaseAndGetAddressOf()))) return false;
-    if (FAILED(dwrite_factory_->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 11.5F, L"en-US", tooltip_format_.ReleaseAndGetAddressOf()))) return false;
+    const auto text_scale = static_cast<float>(settings_.interface_text_scale_percent) / 100.0F;
+    if (FAILED(dwrite_factory_->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 22.0F * text_scale, L"en-US", title_format_.ReleaseAndGetAddressOf()))) return false;
+    if (FAILED(dwrite_factory_->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 11.0F * text_scale, L"en-US", subtitle_format_.ReleaseAndGetAddressOf()))) return false;
+    if (FAILED(dwrite_factory_->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12.0F * text_scale, L"en-US", body_format_.ReleaseAndGetAddressOf()))) return false;
+    if (FAILED(dwrite_factory_->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12.0F * text_scale, L"en-US", value_format_.ReleaseAndGetAddressOf()))) return false;
+    if (FAILED(dwrite_factory_->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 11.5F * text_scale, L"en-US", tooltip_format_.ReleaseAndGetAddressOf()))) return false;
 
     for (const auto format : {subtitle_format_.Get(), body_format_.Get(), value_format_.Get()}) {
         format->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
@@ -1274,7 +1301,7 @@ void NativeWindow::ShowSettings() noexcept {
     snapshots_.ReadLatest(ui_snapshot_);
     if (!ShowSettingsWindow(window_, updated, ui_snapshot_)) return;
     settings_ = updated;
-    palette_ = PaletteFor(settings_.theme, settings_.text_color_rgb);
+    palette_ = PaletteFor(settings_.theme, settings_.text_color_rgb, settings_.high_contrast);
     static_cast<void>(settings_store_.Save(settings_));
     static_cast<void>(ApplyStartupRegistration(settings_.start_with_windows, settings_.start_minimized));
     osd_window_.ApplySettings(settings_);
@@ -1290,6 +1317,49 @@ void NativeWindow::ShowSettings() noexcept {
     DiscardDeviceResources();
     ApplyDwmAppearance();
     InvalidateRect(window_, nullptr, FALSE);
+}
+
+void NativeWindow::ShowFirstRunSetup() noexcept {
+    constexpr int use_recommended = 4'001;
+    constexpr int customize = 4'002;
+    constexpr TASKDIALOG_BUTTON buttons[]{
+        {use_recommended, L"Use recommended settings\nFavorites, stable updates, game-only FPS, and a balanced 750 ms hardware refresh."},
+        {customize, L"Customize settings\nChoose appearance, accessibility, monitoring, and on-screen-display options."},
+    };
+    TASKDIALOGCONFIG configuration{};
+    configuration.cbSize = sizeof(configuration);
+    configuration.hwndParent = window_;
+    configuration.dwFlags = TDF_USE_COMMAND_LINKS | TDF_POSITION_RELATIVE_TO_WINDOW | TDF_SIZE_TO_CONTENT;
+    configuration.pszWindowTitle = L"Welcome to HardwareScope";
+    configuration.pszMainIcon = TD_INFORMATION_ICON;
+    configuration.pszMainInstruction = L"Set up HardwareScope";
+    configuration.pszContent = L"Start with the recommended lightweight configuration or review every option now. You can change these choices later from Settings.";
+    configuration.cButtons = static_cast<UINT>(std::size(buttons));
+    configuration.pButtons = buttons;
+    configuration.nDefaultButton = use_recommended;
+
+    int selected = use_recommended;
+    using TaskDialogIndirectFunction = HRESULT(WINAPI*)(const TASKDIALOGCONFIG*, int*, int*, BOOL*);
+    auto controls = GetModuleHandleW(L"comctl32.dll");
+    if (controls == nullptr) controls = LoadLibraryW(L"comctl32.dll");
+    const auto task_dialog = controls == nullptr
+        ? nullptr
+        : reinterpret_cast<TaskDialogIndirectFunction>(GetProcAddress(controls, "TaskDialogIndirect"));
+    if (task_dialog == nullptr || FAILED(task_dialog(&configuration, &selected, nullptr, nullptr))) {
+        selected = MessageBoxW(
+            window_,
+            L"Use HardwareScope's recommended lightweight settings?\n\nChoose No to open Settings and customize the app.",
+            L"Welcome to HardwareScope",
+            MB_YESNO | MB_ICONINFORMATION) == IDNO
+            ? customize
+            : use_recommended;
+    }
+
+    settings_.onboarding_completed = true;
+    first_run_ = false;
+    static_cast<void>(settings_store_.Save(settings_));
+    if (selected == customize) ShowSettings();
+    else ScheduleAutomaticUpdateCheck();
 }
 
 void NativeWindow::ScheduleAutomaticUpdateCheck(const std::uint32_t default_delay_ms) noexcept {

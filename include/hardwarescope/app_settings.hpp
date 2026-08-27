@@ -32,7 +32,7 @@ enum EasyTemperature : std::uint32_t {
 };
 
 struct AppSettings final {
-    static constexpr std::uint32_t kSchemaVersion = 3U;
+    static constexpr std::uint32_t kSchemaVersion = 4U;
     static constexpr std::size_t kMaximumPinnedSensors = 64U;
     static constexpr std::size_t kMaximumFavoriteSensors = 64U;
     static constexpr std::uint32_t kMatchAccentColor = 0x01000000U;
@@ -48,6 +48,10 @@ struct AppSettings final {
     std::uint32_t storage_color_rgb{kMatchAccentColor};
     std::uint32_t memory_color_rgb{kMatchAccentColor};
     std::uint32_t system_color_rgb{kMatchAccentColor};
+
+    std::uint32_t interface_text_scale_percent{100U};
+    bool high_contrast{};
+    bool onboarding_completed{};
 
     bool start_with_windows{};
     bool start_minimized{};

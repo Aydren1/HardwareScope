@@ -150,6 +150,9 @@ void TestSettingsStore() {
     settings.cpu_temperature_color_rgb = 0x123456U;
     settings.cpu_usage_color_rgb = hardwarescope::AppSettings::kMatchAccentColor;
     settings.graphics_color_rgb = 0x1ABCDEFU;
+    settings.interface_text_scale_percent = 999U;
+    settings.high_contrast = true;
+    settings.onboarding_completed = true;
     settings.start_with_windows = true;
     settings.start_minimized = true;
     settings.osd_position = hardwarescope::OsdPosition::bottom_right;
@@ -196,6 +199,8 @@ void TestSettingsStore() {
     Expect(loaded.cpu_temperature_color_rgb == 0x123456U, "CPU temperature color round-trips independently");
     Expect(loaded.cpu_usage_color_rgb == hardwarescope::AppSettings::kMatchAccentColor, "category colors can continue matching the accent");
     Expect(loaded.graphics_color_rgb == 0xABCDEFU, "category colors are normalized to RGB");
+    Expect(loaded.interface_text_scale_percent == 130U && loaded.high_contrast && loaded.onboarding_completed,
+        "accessibility and onboarding settings clamp and round-trip");
     Expect(loaded.start_with_windows && loaded.start_minimized, "startup settings round-trip");
     Expect(loaded.show_osd, "unmodified OSD setting retains its saved default");
     Expect(loaded.osd_position == hardwarescope::OsdPosition::bottom_right, "OSD position round-trips");
@@ -227,8 +232,37 @@ void TestSettingsStore() {
     temporary += L".tmp";
     Expect(!fs::exists(temporary), "atomic save leaves no temporary settings file");
 
+    const auto invalid_path = path.parent_path() / (L"HardwareScopeNativeSettings-invalid-" + std::to_wstring(GetCurrentProcessId()) + L".ini");
+    {
+        std::ofstream invalid{invalid_path, std::ios::binary | std::ios::trunc};
+        invalid << "not_a_hardwarescope_file=1\n";
+    }
+    hardwarescope::AppSettings invalid_destination{};
+    Expect(!hardwarescope::SettingsStore{invalid_path}.Load(invalid_destination), "settings import rejects files without a schema marker");
+
+    const auto future_path = path.parent_path() / (L"HardwareScopeNativeSettings-future-" + std::to_wstring(GetCurrentProcessId()) + L".ini");
+    {
+        std::ofstream future{future_path, std::ios::binary | std::ios::trunc};
+        future << "schema_version=" << hardwarescope::AppSettings::kSchemaVersion + 1U << "\n";
+    }
+    Expect(!hardwarescope::SettingsStore{future_path}.Load(invalid_destination), "settings import rejects unsupported future schemas");
+
+    const auto previous_schema_path = path.parent_path() / (L"HardwareScopeNativeSettings-previous-" + std::to_wstring(GetCurrentProcessId()) + L".ini");
+    {
+        std::ofstream previous{previous_schema_path, std::ios::binary | std::ios::trunc};
+        previous << "schema_version=3\ntheme=2\n";
+    }
+    hardwarescope::AppSettings previous_schema{};
+    Expect(hardwarescope::SettingsStore{previous_schema_path}.Load(previous_schema)
+            && previous_schema.onboarding_completed
+            && previous_schema.theme == hardwarescope::Theme::midnight,
+        "existing users migrate without seeing first-run setup again");
+
     std::error_code error;
     static_cast<void>(fs::remove(path, error));
+    static_cast<void>(fs::remove(invalid_path, error));
+    static_cast<void>(fs::remove(future_path, error));
+    static_cast<void>(fs::remove(previous_schema_path, error));
 }
 
 void TestOsdModel() {
@@ -474,6 +508,7 @@ void TestUiPalettes() {
     const auto dark = hardwarescope::PaletteFor(hardwarescope::Theme::dark, 0xFF5252U);
     const auto light = hardwarescope::PaletteFor(hardwarescope::Theme::light, 0xFFD93DU);
     const auto midnight = hardwarescope::PaletteFor(hardwarescope::Theme::midnight, 0x52E0D4U);
+    const auto high_contrast = hardwarescope::PaletteFor(hardwarescope::Theme::dark, 0x52E0D4U, true);
     Expect(dark.background == 0x071016U && dark.text == 0xF3F8FAU, "dark palette keeps the entire app dark with readable text");
     Expect(dark.accent == 0xFF5252U, "dark palette honors the configured accent color");
     Expect(dark.selection != 0xFFFFFFU && dark.hover != 0xFFFFFFU, "dark palette never falls back to white selection or hover surfaces");
@@ -481,6 +516,8 @@ void TestUiPalettes() {
     Expect(light.accent == 0xFFD93DU, "light palette honors the configured accent color");
     Expect(midnight.background == 0x000000U && midnight.header == 0x030303U && midnight.text == 0xF7F9FAU,
         "midnight palette uses pitch-black surfaces with readable text");
+    Expect(high_contrast.text == 0xFFFFFFU && high_contrast.muted == 0xD4E2E9U && high_contrast.line == 0x58717EU,
+        "high-contrast mode strengthens primary text, secondary text, and borders");
     Expect(hardwarescope::PaletteFor(hardwarescope::Theme::dark, 0xFF52E0D4U).accent == 0x52E0D4U, "palette strips non-RGB flag bits");
 }
 

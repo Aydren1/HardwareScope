@@ -21,6 +21,6 @@ struct UiPalette final {
     std::uint32_t disabled{};
 };
 
-[[nodiscard]] UiPalette PaletteFor(Theme theme, std::uint32_t accent_rgb) noexcept;
+[[nodiscard]] UiPalette PaletteFor(Theme theme, std::uint32_t accent_rgb, bool high_contrast = false) noexcept;
 
 } // namespace hardwarescope
