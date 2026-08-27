@@ -1,9 +1,9 @@
 {
-  "version": "2.0.6",
+  "version": "2.0.7",
   "channel": "stable",
   "published": "2026-08-27",
-  "installer": "https://github.com/Aydren1/HardwareScope/releases/download/v2.0.6/HardwareScope-Setup-2.0.6-x64.exe",
-  "sha256": "944B13A641C3035AC7B38206D5230D2E1746A925C7C994FC1C72F876966046EA",
-  "size": 2908085,
-  "releaseNotes": "https://github.com/Cero-SC/HardwareScope/releases/tag/v2.0.6"
+  "installer": "https://github.com/Aydren1/HardwareScope/releases/download/v2.0.7/HardwareScope-Setup-2.0.7-x64.exe",
+  "sha256": "1FAC3FC2C7B51D20CCE6818F1298C6E99CEEC47EF90D3864D234FE5FDF020340",
+  "size": 2912664,
+  "releaseNotes": "https://github.com/Cero-SC/HardwareScope/releases/tag/v2.0.7"
 }
