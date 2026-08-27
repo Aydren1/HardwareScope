@@ -171,11 +171,7 @@ void SensorWorker::Run(const std::stop_token stop_token, const std::chrono::mill
                     return sensor.kind == SensorKind::frame_rate;
                 });
                 snapshot.count = static_cast<std::uint32_t>(new_end - snapshot.sensors.begin());
-                SensorValue frame{};
-                if (privileged_bridge_.CollectFrameRate(frame) && snapshot.count < snapshot.sensors.size()) {
-                    frame_rate_available = true;
-                    snapshot.sensors[snapshot.count++] = frame;
-                }
+                frame_rate_available = privileged_bridge_.CollectFrameRates(snapshot);
             }
         } else {
             CollectSynthetic(++sequence, snapshot);

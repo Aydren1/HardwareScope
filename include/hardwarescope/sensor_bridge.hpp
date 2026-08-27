@@ -70,6 +70,7 @@ public:
 
     [[nodiscard]] bool Collect(SensorSnapshot& destination) noexcept;
     [[nodiscard]] bool CollectFrameRate(SensorValue& destination) noexcept;
+    [[nodiscard]] bool CollectFrameRates(SensorSnapshot& destination) noexcept;
     [[nodiscard]] bool SetFpsTarget(
         std::uint32_t process_id,
         std::uint32_t smoothing_milliseconds,

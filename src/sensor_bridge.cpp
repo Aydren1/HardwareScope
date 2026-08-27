@@ -187,6 +187,19 @@ bool SensorBridgeClient::CollectFrameRate(SensorValue& destination) noexcept {
     return true;
 }
 
+bool SensorBridgeClient::CollectFrameRates(SensorSnapshot& destination) noexcept {
+    SensorSnapshot snapshot{};
+    if (!Collect(snapshot)) return false;
+    bool copied{};
+    for (std::uint32_t index{}; index < snapshot.count && destination.count < destination.sensors.size(); ++index) {
+        const auto& sensor = snapshot.sensors[index];
+        if (!sensor.available || sensor.kind != SensorKind::frame_rate) continue;
+        destination.sensors[destination.count++] = sensor;
+        copied = true;
+    }
+    return copied;
+}
+
 bool SensorBridgeClient::SetFpsTarget(
     const std::uint32_t process_id,
     const std::uint32_t smoothing_milliseconds,

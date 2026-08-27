@@ -34,12 +34,15 @@ std::wstring FormattedValue(const SensorValue& sensor) {
     case SensorUnit::volts: swprintf_s(value.data(), value.size(), L"%.3f V", sensor.current); break;
     case SensorUnit::megabytes: swprintf_s(value.data(), value.size(), L"%.0f MB", sensor.current); break;
     case SensorUnit::frames_per_second: swprintf_s(value.data(), value.size(), L"%.0f", sensor.current); break;
+    case SensorUnit::milliseconds: swprintf_s(value.data(), value.size(), L"%.2f ms", sensor.current); break;
     }
     return value.data();
 }
 
 std::wstring LabelFor(const SensorValue& sensor) {
     const std::wstring_view name{sensor.name.data()};
+    if (sensor.id == kFpsOnePercentLowSensorId) return L"1% Low";
+    if (sensor.id == kFpsFrameTimeSensorId) return L"Frame time";
     if (sensor.kind == SensorKind::frame_rate) return L"FPS";
     if (Contains(name, L"Tctl") || Contains(name, L"CPU Package")) return L"CPU Tctl/Tdie";
     if (Contains(name, L"Memory Junction")) return L"GPU Memory Junction";
@@ -79,9 +82,17 @@ std::vector<OsdDisplayItem> BuildOsdDisplayItems(const SensorSnapshot& snapshot,
 
     if (settings.fps_enabled) {
         for (std::uint32_t index = 0; index < snapshot.count; ++index) {
-            if (snapshot.sensors[index].kind == SensorKind::frame_rate) {
+            if (snapshot.sensors[index].id == kFpsSensorId) {
                 add(snapshot.sensors[index], true);
                 break;
+            }
+        }
+        if (settings.fps_one_percent_low_enabled) {
+            for (std::uint32_t index = 0; index < snapshot.count; ++index) {
+                if (snapshot.sensors[index].id == kFpsOnePercentLowSensorId) {
+                    add(snapshot.sensors[index], true);
+                    break;
+                }
             }
         }
     }
@@ -130,7 +141,10 @@ std::vector<OsdDisplayItem> BuildOsdSurfaceItems(
 }
 
 bool IsSensorSelectedForOsd(const SensorValue& sensor, const AppSettings& settings) noexcept {
-    if (sensor.kind == SensorKind::frame_rate) return settings.fps_enabled;
+    if (sensor.id == kFpsSensorId) return settings.fps_enabled;
+    if (sensor.id == kFpsOnePercentLowSensorId) return settings.fps_enabled && settings.fps_one_percent_low_enabled;
+    if (sensor.id == kFpsFrameTimeSensorId) return settings.osd_graph_enabled && settings.osd_graph_sensor_id == sensor.id;
+    if (sensor.kind == SensorKind::frame_rate) return false;
     if (settings.IsSensorPinned(sensor.id)) return true;
     if (!settings.easy_temperature_enabled) return false;
     if (IsCpuEasyTemperature(sensor)) return (settings.easy_temperature_mask & easy_cpu_package) != 0U;
@@ -140,8 +154,17 @@ bool IsSensorSelectedForOsd(const SensorValue& sensor, const AppSettings& settin
 }
 
 void SetSensorSelectedForOsd(const SensorValue& sensor, AppSettings& settings, const bool selected) noexcept {
-    if (sensor.kind == SensorKind::frame_rate) {
+    if (sensor.id == kFpsSensorId) {
         settings.fps_enabled = selected;
+        return;
+    }
+    if (sensor.id == kFpsOnePercentLowSensorId) {
+        settings.fps_one_percent_low_enabled = selected;
+        return;
+    }
+    if (sensor.id == kFpsFrameTimeSensorId) {
+        settings.osd_graph_sensor_id = sensor.id;
+        settings.osd_graph_enabled = selected;
         return;
     }
     if (selected) {

@@ -45,6 +45,9 @@ roles and release controls, and the [privacy policy](PRIVACY.md).
 - Standard, large, and extra-large interface text plus an optional high-contrast palette
 - Keyboard shortcuts: `Ctrl+F` searches sensors, `Ctrl+,` opens Settings, and `Esc` clears search
 - Independent, game-only FPS capture and display settings
+- Rolling 1% low FPS calculated from the slowest recent PresentMon frame times
+- One optional live OSD graph for FPS frame time or any available hardware sensor,
+  with configurable history, refresh rate, width, and height
 - Minimize-to-tray behavior, startup options, and single-instance enforcement
 - Verified GitHub updates with installer size and SHA-256 validation
 - Statically linked MSVC runtime; no separate Visual C++ redistributable needed

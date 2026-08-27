@@ -14,6 +14,8 @@ namespace hardwarescope {
 struct PresentMonFpsReading final {
     bool available{};
     std::uint32_t frames_per_second{};
+    std::uint32_t one_percent_low_frames_per_second{};
+    double frame_time_milliseconds{};
     std::uint32_t process_id{};
     std::array<wchar_t, 64U> application{};
 };
@@ -44,12 +46,20 @@ private:
     std::atomic<std::uint32_t> target_process_id_{};
     std::atomic<std::uint32_t> smoothing_milliseconds_{500U};
     ULONGLONG next_start_attempt_tick_{};
-    std::array<double, 512U> intervals_{};
+    static constexpr std::size_t kMaximumIntervals = 16'384U;
+    static constexpr double kHistoryMilliseconds = 60'000.0;
+
+    std::array<double, kMaximumIntervals> intervals_{};
     std::size_t interval_first_{};
     std::size_t interval_count_{};
     double interval_total_{};
     ULONGLONG last_frame_tick_{};
+    mutable ULONGLONG last_percentile_tick_{};
+    mutable std::uint32_t cached_one_percent_low_{};
+    mutable std::array<double, kMaximumIntervals> percentile_scratch_{};
     std::array<wchar_t, 64U> application_{};
 };
+
+[[nodiscard]] std::uint32_t CalculateOnePercentLowFps(double* intervals, std::size_t count) noexcept;
 
 } // namespace hardwarescope

@@ -32,7 +32,7 @@ enum EasyTemperature : std::uint32_t {
 };
 
 struct AppSettings final {
-    static constexpr std::uint32_t kSchemaVersion = 4U;
+    static constexpr std::uint32_t kSchemaVersion = 5U;
     static constexpr std::size_t kMaximumPinnedSensors = 64U;
     static constexpr std::size_t kMaximumFavoriteSensors = 64U;
     static constexpr std::uint32_t kMatchAccentColor = 0x01000000U;
@@ -77,6 +77,14 @@ struct AppSettings final {
     std::uint32_t fps_smoothing_interval_ms{500U};
     std::uint32_t fps_color_rgb{0x52E0D4U};
     std::uint32_t fps_scale_percent{100U};
+    bool fps_one_percent_low_enabled{true};
+
+    bool osd_graph_enabled{};
+    std::uint64_t osd_graph_sensor_id{3U};
+    std::uint32_t osd_graph_history_seconds{30U};
+    std::uint32_t osd_graph_refresh_interval_ms{100U};
+    std::uint32_t osd_graph_width_px{240U};
+    std::uint32_t osd_graph_height_px{64U};
 
     bool automatic_updates{true};
     std::uint64_t update_snooze_until_unix_seconds{};

@@ -95,6 +95,13 @@ struct DialogState final {
     HWND fps_smoothing{};
     HWND fps_color{};
     HWND fps_scale{};
+    HWND fps_one_percent_low{};
+    HWND graph_enabled{};
+    HWND graph_source{};
+    HWND graph_history{};
+    HWND graph_refresh{};
+    HWND graph_width{};
+    HWND graph_height{};
     HWND sensor_list{};
     std::array<HWND, 8U> section_colors{};
 };
@@ -354,6 +361,57 @@ void SelectComboValue(const HWND combo, const std::uint32_t value) noexcept {
     }
 }
 
+std::uint64_t ComboValue64(const HWND combo, const std::uint64_t fallback) noexcept {
+    const auto selected = SendMessageW(combo, CB_GETCURSEL, 0, 0);
+    if (selected == CB_ERR) return fallback;
+    const auto value = SendMessageW(combo, CB_GETITEMDATA, static_cast<WPARAM>(selected), 0);
+    return value == CB_ERR ? fallback : static_cast<std::uint64_t>(value);
+}
+
+void SelectComboValue64(const HWND combo, const std::uint64_t value) noexcept {
+    const auto count = static_cast<int>(SendMessageW(combo, CB_GETCOUNT, 0, 0));
+    for (int index{}; index < count; ++index) {
+        if (static_cast<std::uint64_t>(SendMessageW(combo, CB_GETITEMDATA, index, 0)) == value) {
+            SendMessageW(combo, CB_SETCURSEL, index, 0);
+            return;
+        }
+    }
+    const auto item = SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Saved sensor (currently unavailable)"));
+    if (item != CB_ERR && item != CB_ERRSPACE) {
+        SendMessageW(combo, CB_SETITEMDATA, static_cast<WPARAM>(item), static_cast<LPARAM>(value));
+        SendMessageW(combo, CB_SETCURSEL, static_cast<WPARAM>(item), 0);
+    }
+}
+
+HWND GraphSourceCombo(DialogState& state, const int y, const int page) {
+    const auto control = AddControl(state, WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_BORDER | WS_TABSTOP | WS_VSCROLL, 270, y, 350, 260, 0, page);
+    if (control == nullptr) return nullptr;
+    static_cast<void>(SetWindowSubclass(control, &ComboWindowProcedure, 1U, reinterpret_cast<DWORD_PTR>(&state)));
+    SendMessageW(control, CB_SETITEMHEIGHT, static_cast<WPARAM>(-1), Scale(state, 28));
+    SendMessageW(control, CB_SETITEMHEIGHT, 0U, Scale(state, 28));
+    const auto fps_item = SendMessageW(control, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"FPS frame time"));
+    SendMessageW(control, CB_SETITEMDATA, static_cast<WPARAM>(fps_item), static_cast<LPARAM>(kFpsFrameTimeSensorId));
+    bool selected = state.draft.osd_graph_sensor_id == kFpsFrameTimeSensorId;
+    if (selected) SendMessageW(control, CB_SETCURSEL, static_cast<WPARAM>(fps_item), 0);
+    for (std::uint32_t index{}; state.snapshot != nullptr && index < state.snapshot->count; ++index) {
+        const auto& sensor = state.snapshot->sensors[index];
+        if (sensor.kind == SensorKind::frame_rate || !sensor.available) continue;
+        std::wstring label = sensor.name.data();
+        label += L"  —  ";
+        label += sensor.hardware.data();
+        const auto item = SendMessageW(control, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str()));
+        if (item == CB_ERR || item == CB_ERRSPACE) continue;
+        SendMessageW(control, CB_SETITEMDATA, static_cast<WPARAM>(item), static_cast<LPARAM>(sensor.id));
+        if (sensor.id == state.draft.osd_graph_sensor_id) {
+            SendMessageW(control, CB_SETCURSEL, static_cast<WPARAM>(item), 0);
+            selected = true;
+        }
+    }
+    if (!selected) SelectComboValue64(control, state.draft.osd_graph_sensor_id);
+    InvalidateRect(control, nullptr, TRUE);
+    return control;
+}
+
 bool Checked(const HWND control) noexcept { return SendMessageW(control, BM_GETCHECK, 0, 0) == BST_CHECKED; }
 
 std::vector<std::pair<const wchar_t*, std::uint32_t>> ColorChoices(const bool include_match_accent) {
@@ -430,7 +488,7 @@ void RecreateFont(DialogState& state) noexcept {
 }
 
 void UpdateOwnerDrawMetrics(DialogState& state) noexcept {
-    if (state.tabs != nullptr) TabCtrl_SetItemSize(state.tabs, Scale(state, 150), Scale(state, 36));
+    if (state.tabs != nullptr) TabCtrl_SetItemSize(state.tabs, Scale(state, 116), Scale(state, 36));
     for (const auto& record : state.paged_controls) {
         std::array<wchar_t, 32U> class_name{};
         if (GetClassNameW(record.window, class_name.data(), static_cast<int>(class_name.size())) == 0) continue;
@@ -520,8 +578,8 @@ void HandleScroll(DialogState& state, const int bar, const WPARAM wparam, const 
 void BuildControls(DialogState& state) {
     state.tabs = AddControl(state, WC_TABCONTROLW, L"", TCS_OWNERDRAWFIXED | TCS_FIXEDWIDTH | WS_TABSTOP, 20, 18, 610, 38, kTabs, -1);
     if (state.tabs != nullptr) static_cast<void>(SetWindowSubclass(state.tabs, &TabWindowProcedure, 1U, reinterpret_cast<DWORD_PTR>(&state)));
-    TabCtrl_SetItemSize(state.tabs, Scale(state, 150), Scale(state, 36));
-    constexpr std::array<const wchar_t*, 4U> pages{L"General", L"On-screen display", L"Monitoring", L"Colors"};
+    TabCtrl_SetItemSize(state.tabs, Scale(state, 116), Scale(state, 36));
+    constexpr std::array<const wchar_t*, 5U> pages{L"General", L"OSD", L"Monitoring", L"Graphs", L"Colors"};
     for (std::size_t index = 0U; index < pages.size(); ++index) {
         TCITEMW item{};
         item.mask = TCIF_TEXT;
@@ -578,14 +636,15 @@ void BuildControls(DialogState& state) {
 
     state.fps_enabled = Check(state, L"Enable game FPS monitoring", state.draft.fps_enabled, 82, 2);
     state.fps_game_only = Check(state, L"Show FPS only while a game is running", state.draft.fps_game_only, 114, 2);
-    Label(state, L"FPS refresh", 154, 2);
-    state.fps_refresh = Combo(state, 154, 2, {{L"50 ms", 50U}, {L"100 ms", 100U}, {L"200 ms", 200U}, {L"250 ms", 250U}, {L"500 ms", 500U}}, state.draft.fps_refresh_interval_ms);
-    Label(state, L"FPS smoothing", 194, 2);
-    state.fps_smoothing = Combo(state, 194, 2, {{L"250 ms", 250U}, {L"500 ms", 500U}, {L"750 ms", 750U}, {L"1 second", 1'000U}, {L"1.25 seconds", 1'250U}}, state.draft.fps_smoothing_interval_ms);
-    Label(state, L"FPS scale", 234, 2);
-    state.fps_scale = Combo(state, 234, 2, {{L"50%", 50U}, {L"75%", 75U}, {L"100%", 100U}, {L"125%", 125U}, {L"150%", 150U}, {L"200%", 200U}, {L"250%", 250U}, {L"300%", 300U}}, state.draft.fps_scale_percent);
-    Label(state, L"Sensors shown in the OSD", 286, 2, 42, 220);
-    state.sensor_list = AddControl(state, L"LISTBOX", L"", LBS_EXTENDEDSEL | LBS_NOINTEGRALHEIGHT | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS | WS_BORDER | WS_VSCROLL | WS_TABSTOP, 270, 282, 350, 276, 0, 2);
+    state.fps_one_percent_low = Check(state, L"Show rolling 1% low FPS", state.draft.fps_one_percent_low_enabled, 146, 2);
+    Label(state, L"FPS refresh", 186, 2);
+    state.fps_refresh = Combo(state, 186, 2, {{L"50 ms", 50U}, {L"100 ms", 100U}, {L"200 ms", 200U}, {L"250 ms", 250U}, {L"500 ms", 500U}}, state.draft.fps_refresh_interval_ms);
+    Label(state, L"FPS smoothing", 226, 2);
+    state.fps_smoothing = Combo(state, 226, 2, {{L"250 ms", 250U}, {L"500 ms", 500U}, {L"750 ms", 750U}, {L"1 second", 1'000U}, {L"1.25 seconds", 1'250U}}, state.draft.fps_smoothing_interval_ms);
+    Label(state, L"FPS scale", 266, 2);
+    state.fps_scale = Combo(state, 266, 2, {{L"50%", 50U}, {L"75%", 75U}, {L"100%", 100U}, {L"125%", 125U}, {L"150%", 150U}, {L"200%", 200U}, {L"250%", 250U}, {L"300%", 300U}}, state.draft.fps_scale_percent);
+    Label(state, L"Sensors shown in the OSD", 318, 2, 42, 220);
+    state.sensor_list = AddControl(state, L"LISTBOX", L"", LBS_EXTENDEDSEL | LBS_NOINTEGRALHEIGHT | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS | WS_BORDER | WS_VSCROLL | WS_TABSTOP, 270, 314, 350, 244, kSettingsSensorListControl, 2);
     SendMessageW(state.sensor_list, LB_SETITEMHEIGHT, 0U, Scale(state, 28));
     for (std::uint32_t index = 0U; state.snapshot != nullptr && index < state.snapshot->count; ++index) {
         const auto& sensor = state.snapshot->sensors[index];
@@ -598,6 +657,19 @@ void BuildControls(DialogState& state) {
         if (IsSensorSelectedForOsd(sensor, state.draft)) SendMessageW(state.sensor_list, LB_SETSEL, TRUE, item);
     }
 
+    state.graph_enabled = Check(state, L"Show one lightweight live graph in the OSD", state.draft.osd_graph_enabled, 82, 3);
+    Label(state, L"Graph source", 126, 3);
+    state.graph_source = GraphSourceCombo(state, 126, 3);
+    Label(state, L"Graph history", 166, 3);
+    state.graph_history = Combo(state, 166, 3, {{L"5 seconds", 5U}, {L"10 seconds", 10U}, {L"15 seconds", 15U}, {L"30 seconds", 30U}, {L"60 seconds", 60U}}, state.draft.osd_graph_history_seconds);
+    Label(state, L"Graph refresh", 206, 3);
+    state.graph_refresh = Combo(state, 206, 3, {{L"100 ms", 100U}, {L"200 ms", 200U}, {L"250 ms", 250U}, {L"500 ms", 500U}}, state.draft.osd_graph_refresh_interval_ms);
+    Label(state, L"Graph width", 246, 3);
+    state.graph_width = Combo(state, 246, 3, {{L"120 px", 120U}, {L"180 px", 180U}, {L"240 px", 240U}, {L"320 px", 320U}, {L"420 px", 420U}, {L"480 px", 480U}}, state.draft.osd_graph_width_px);
+    Label(state, L"Graph height", 286, 3);
+    state.graph_height = Combo(state, 286, 3, {{L"40 px", 40U}, {L"48 px", 48U}, {L"64 px", 64U}, {L"88 px", 88U}, {L"120 px", 120U}, {L"160 px", 160U}}, state.draft.osd_graph_height_px);
+    Label(state, L"FPS uses true PresentMon frame times. Hardware graphs follow sensor polling.", 342, 3, 42, 578);
+
     const auto category_choices = ColorChoices(true);
     constexpr std::array<const wchar_t*, 8U> category_labels{
         L"CPU temperatures", L"CPU usage", L"CPU clock speeds", L"CPU power & voltage",
@@ -609,11 +681,11 @@ void BuildControls(DialogState& state) {
         state.draft.memory_color_rgb, state.draft.system_color_rgb};
     for (std::size_t index = 0U; index < category_labels.size(); ++index) {
         const auto y = 82 + static_cast<int>(index) * 40;
-        Label(state, category_labels[index], y, 3);
-        state.section_colors[index] = Combo(state, y, 3, category_choices, category_values[index]);
+        Label(state, category_labels[index], y, 4);
+        state.section_colors[index] = Combo(state, y, 4, category_choices, category_values[index]);
     }
-    Label(state, L"FPS", 402, 3);
-    state.fps_color = Combo(state, 402, 3, category_choices, state.draft.fps_color_rgb);
+    Label(state, L"FPS", 402, 4);
+    state.fps_color = Combo(state, 402, 4, category_choices, state.draft.fps_color_rgb);
 
     PushButton(state, L"Cancel", 408, 605, 100, 38, kCancel, -1);
     PushButton(state, L"Save settings", 518, 605, 120, 38, kSave, -1);
@@ -648,6 +720,13 @@ void ReadControls(DialogState& state) noexcept {
     state.draft.fps_smoothing_interval_ms = ComboValue(state.fps_smoothing, state.draft.fps_smoothing_interval_ms);
     state.draft.fps_color_rgb = ComboValue(state.fps_color, state.draft.fps_color_rgb);
     state.draft.fps_scale_percent = ComboValue(state.fps_scale, state.draft.fps_scale_percent);
+    state.draft.fps_one_percent_low_enabled = Checked(state.fps_one_percent_low);
+    state.draft.osd_graph_enabled = Checked(state.graph_enabled);
+    state.draft.osd_graph_sensor_id = ComboValue64(state.graph_source, state.draft.osd_graph_sensor_id);
+    state.draft.osd_graph_history_seconds = ComboValue(state.graph_history, state.draft.osd_graph_history_seconds);
+    state.draft.osd_graph_refresh_interval_ms = ComboValue(state.graph_refresh, state.draft.osd_graph_refresh_interval_ms);
+    state.draft.osd_graph_width_px = ComboValue(state.graph_width, state.draft.osd_graph_width_px);
+    state.draft.osd_graph_height_px = ComboValue(state.graph_height, state.draft.osd_graph_height_px);
     state.draft.cpu_temperature_color_rgb = ComboValue(state.section_colors[0], state.draft.cpu_temperature_color_rgb);
     state.draft.cpu_usage_color_rgb = ComboValue(state.section_colors[1], state.draft.cpu_usage_color_rgb);
     state.draft.cpu_clock_color_rgb = ComboValue(state.section_colors[2], state.draft.cpu_clock_color_rgb);
@@ -694,6 +773,13 @@ void ApplyDraftToControls(DialogState& state) noexcept {
     SelectComboValue(state.fps_smoothing, state.draft.fps_smoothing_interval_ms);
     SelectComboValue(state.fps_color, state.draft.fps_color_rgb);
     SelectComboValue(state.fps_scale, state.draft.fps_scale_percent);
+    SendMessageW(state.fps_one_percent_low, BM_SETCHECK, state.draft.fps_one_percent_low_enabled ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(state.graph_enabled, BM_SETCHECK, state.draft.osd_graph_enabled ? BST_CHECKED : BST_UNCHECKED, 0);
+    SelectComboValue64(state.graph_source, state.draft.osd_graph_sensor_id);
+    SelectComboValue(state.graph_history, state.draft.osd_graph_history_seconds);
+    SelectComboValue(state.graph_refresh, state.draft.osd_graph_refresh_interval_ms);
+    SelectComboValue(state.graph_width, state.draft.osd_graph_width_px);
+    SelectComboValue(state.graph_height, state.draft.osd_graph_height_px);
     const std::array<std::uint32_t, 8U> colors{
         state.draft.cpu_temperature_color_rgb, state.draft.cpu_usage_color_rgb,
         state.draft.cpu_clock_color_rgb, state.draft.cpu_power_color_rgb,
@@ -849,6 +935,12 @@ LRESULT CALLBACK WindowProcedure(const HWND window, const UINT message, const WP
     if (state == nullptr) return DefWindowProcW(window, message, wparam, lparam);
     switch (message) {
 #if HARDWARESCOPE_INTERNAL_TEST_HOOKS
+    case kSelectSettingsTabTestMessage: {
+        const auto page = std::clamp(static_cast<int>(wparam), 0, TabCtrl_GetItemCount(state->tabs) - 1);
+        static_cast<void>(TabCtrl_SetCurSel(state->tabs, page));
+        ShowPage(*state, page);
+        return page + 1;
+    }
     case kApplySettingsDpiTestMessage: {
         const auto previous_dpi = std::max(96U, state->dpi);
         const auto target_dpi = std::clamp(static_cast<UINT>(wparam), 96U, 384U);

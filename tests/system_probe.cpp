@@ -18,6 +18,7 @@ const wchar_t* Unit(const hardwarescope::SensorUnit unit) noexcept {
     case hardwarescope::SensorUnit::volts: return L"V";
     case hardwarescope::SensorUnit::megabytes: return L"MB";
     case hardwarescope::SensorUnit::frames_per_second: return L"FPS";
+    case hardwarescope::SensorUnit::milliseconds: return L"ms";
     }
     return L"";
 }

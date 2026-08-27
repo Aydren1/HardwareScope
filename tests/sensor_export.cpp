@@ -64,6 +64,7 @@ std::string_view UnitName(const hardwarescope::SensorUnit unit) noexcept {
     case volts: return "V";
     case megabytes: return "MB";
     case frames_per_second: return "FPS";
+    case milliseconds: return "ms";
     }
     return "unknown";
 }

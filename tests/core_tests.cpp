@@ -6,6 +6,7 @@
 #include "hardwarescope/game_detector.hpp"
 #include "hardwarescope/legacy_settings_migration.hpp"
 #include "hardwarescope/osd_model.hpp"
+#include "hardwarescope/presentmon_fps_runner.hpp"
 #include "hardwarescope/nvidia_gpu_provider.hpp"
 #include "hardwarescope/nct6687_provider.hpp"
 #include "hardwarescope/sensor_snapshot.hpp"
@@ -168,6 +169,13 @@ void TestSettingsStore() {
     settings.fps_osd_position = hardwarescope::OsdPosition::top_right;
     settings.fps_refresh_interval_ms = 1U;
     settings.fps_smoothing_interval_ms = 9'999U;
+    settings.fps_one_percent_low_enabled = false;
+    settings.osd_graph_enabled = true;
+    settings.osd_graph_sensor_id = 0x1234'5678'9ABC'DEF0ULL;
+    settings.osd_graph_history_seconds = 999U;
+    settings.osd_graph_refresh_interval_ms = 1U;
+    settings.osd_graph_width_px = 999U;
+    settings.osd_graph_height_px = 1U;
     settings.automatic_updates = false;
     settings.update_snooze_until_unix_seconds = 4'102'444'800ULL;
     settings.skipped_update_major = 2U;
@@ -214,6 +222,12 @@ void TestSettingsStore() {
     Expect(loaded.fps_separate_position && loaded.fps_osd_position == hardwarescope::OsdPosition::top_right,
         "independent FPS OSD corner round-trips");
     Expect(loaded.fps_refresh_interval_ms == 50U && loaded.fps_smoothing_interval_ms == 1'250U, "independent FPS timing settings clamp and round-trip");
+    Expect(!loaded.fps_one_percent_low_enabled, "rolling 1% low visibility round-trips");
+    Expect(loaded.osd_graph_enabled && loaded.osd_graph_sensor_id == 0x1234'5678'9ABC'DEF0ULL,
+        "the live graph and its 64-bit sensor identity round-trip");
+    Expect(loaded.osd_graph_history_seconds == 60U && loaded.osd_graph_refresh_interval_ms == 100U
+            && loaded.osd_graph_width_px == 480U && loaded.osd_graph_height_px == 40U,
+        "live graph history, refresh, and dimensions clamp to lightweight limits");
     Expect(!loaded.automatic_updates, "update preference round-trips");
     Expect(loaded.update_snooze_until_unix_seconds == 4'102'444'800ULL,
         "update reminder time round-trips without precision loss");
@@ -283,31 +297,34 @@ void TestOsdModel() {
         static_cast<void>(wcscpy_s(sensor.hardware.data(), sensor.hardware.size(), hardware));
         sensor.current = current;
     };
-    set_sensor(0, 1U, hardwarescope::SensorKind::temperature, hardwarescope::SensorUnit::celsius, L"Core (Tctl/Tdie)", L"AMD Ryzen CPU", 51.25);
-    set_sensor(1, 2U, hardwarescope::SensorKind::temperature, hardwarescope::SensorUnit::celsius, L"GPU Core temperature", L"NVIDIA GPU", 43.5);
-    set_sensor(2, 3U, hardwarescope::SensorKind::temperature, hardwarescope::SensorUnit::celsius, L"GPU Memory Junction", L"NVIDIA GPU", 58.0);
-    set_sensor(3, 4U, hardwarescope::SensorKind::frame_rate, hardwarescope::SensorUnit::frames_per_second, L"Frame rate", L"Game", 144.0);
-    snapshot.count = 4;
+    set_sensor(0, 10U, hardwarescope::SensorKind::temperature, hardwarescope::SensorUnit::celsius, L"Core (Tctl/Tdie)", L"AMD Ryzen CPU", 51.25);
+    set_sensor(1, 11U, hardwarescope::SensorKind::temperature, hardwarescope::SensorUnit::celsius, L"GPU Core temperature", L"NVIDIA GPU", 43.5);
+    set_sensor(2, 12U, hardwarescope::SensorKind::temperature, hardwarescope::SensorUnit::celsius, L"GPU Memory Junction", L"NVIDIA GPU", 58.0);
+    set_sensor(3, hardwarescope::kFpsSensorId, hardwarescope::SensorKind::frame_rate, hardwarescope::SensorUnit::frames_per_second, L"Frame rate", L"Game", 144.0);
+    set_sensor(4, hardwarescope::kFpsOnePercentLowSensorId, hardwarescope::SensorKind::frame_rate, hardwarescope::SensorUnit::frames_per_second, L"1% low frame rate", L"Game", 91.0);
+    set_sensor(5, hardwarescope::kFpsFrameTimeSensorId, hardwarescope::SensorKind::frame_rate, hardwarescope::SensorUnit::milliseconds, L"Frame time", L"Game", 6.94);
+    snapshot.count = 6;
 
     hardwarescope::AppSettings settings{};
     settings.text_color_rgb = 0x52E0D4U;
     settings.fps_color_rgb = 0xFF7700U;
     settings.osd_layout = hardwarescope::OsdLayout::horizontal;
     const auto items = hardwarescope::BuildOsdDisplayItems(snapshot, settings);
-    Expect(items.size() == 4U, "EZ Temp and FPS create four default OSD items");
-    Expect(items[0].sensor_id == 4U && items[0].fps && items[0].text == L"FPS 144", "FPS is first and has a compact label");
-    Expect(items[0].color_rgb == 0xFF7700U && items[1].color_rgb == 0x52E0D4U, "FPS and telemetry use independent colors");
-    Expect(items[1].group == hardwarescope::OsdHardwareGroup::cpu, "CPU temperature is grouped as CPU");
-    Expect(items[2].group == hardwarescope::OsdHardwareGroup::gpu && items[3].group == hardwarescope::OsdHardwareGroup::gpu, "GPU temperatures share the GPU group");
-    Expect(items[1].text.find(L"CPU Tctl/Tdie") == 0U, "CPU OSD label identifies the Tctl/Tdie reading");
+    Expect(items.size() == 5U, "EZ Temp, FPS, and rolling 1% low create five default OSD items");
+    Expect(items[0].sensor_id == hardwarescope::kFpsSensorId && items[0].fps && items[0].text == L"FPS 144", "FPS is first and has a compact label");
+    Expect(items[1].sensor_id == hardwarescope::kFpsOnePercentLowSensorId && items[1].text == L"1% Low 91", "rolling 1% low follows FPS");
+    Expect(items[0].color_rgb == 0xFF7700U && items[2].color_rgb == 0x52E0D4U, "FPS and telemetry use independent colors");
+    Expect(items[2].group == hardwarescope::OsdHardwareGroup::cpu, "CPU temperature is grouped as CPU");
+    Expect(items[3].group == hardwarescope::OsdHardwareGroup::gpu && items[4].group == hardwarescope::OsdHardwareGroup::gpu, "GPU temperatures share the GPU group");
+    Expect(items[2].text.find(L"CPU Tctl/Tdie") == 0U, "CPU OSD label identifies the Tctl/Tdie reading");
     settings.fps_separate_position = true;
     settings.fps_osd_position = hardwarescope::OsdPosition::top_right;
     const auto telemetry_surface = hardwarescope::BuildOsdSurfaceItems(snapshot, settings, false);
     const auto fps_surface = hardwarescope::BuildOsdSurfaceItems(snapshot, settings, true);
     Expect(telemetry_surface.size() == 3U && std::none_of(telemetry_surface.begin(), telemetry_surface.end(), [](const auto& item) { return item.fps; }),
         "a split OSD keeps hardware telemetry on the primary surface");
-    Expect(fps_surface.size() == 1U && fps_surface.front().fps,
-        "a split OSD moves only FPS to its independent surface");
+    Expect(fps_surface.size() == 2U && std::all_of(fps_surface.begin(), fps_surface.end(), [](const auto& item) { return item.fps; }),
+        "a split OSD moves FPS and its 1% low to the independent surface");
     settings.fps_separate_position = false;
     Expect(hardwarescope::IsSensorSelectedForOsd(snapshot.sensors[0], settings), "EZ CPU temperature reports selected in the main OSD column");
     hardwarescope::SetSensorSelectedForOsd(snapshot.sensors[0], settings, false);
@@ -316,12 +333,24 @@ void TestOsdModel() {
     Expect(settings.IsSensorPinned(snapshot.sensors[0].id), "main OSD toggle can explicitly pin a sensor");
 
     settings.easy_temperature_mask = hardwarescope::easy_cpu_package | hardwarescope::easy_gpu_core;
-    Expect(settings.PinSensor(3U), "disabled EZ temperature can be pinned explicitly");
+    Expect(settings.PinSensor(12U), "disabled EZ temperature can be pinned explicitly");
     const auto pinned_items = hardwarescope::BuildOsdDisplayItems(snapshot, settings);
-    Expect(pinned_items.size() == 4U && pinned_items.back().sensor_id == 3U, "pinned sensor is appended without duplicating EZ items");
+    Expect(pinned_items.size() == 5U && pinned_items.back().sensor_id == 12U, "pinned sensor is appended without duplicating EZ items");
     settings.fps_enabled = false;
     const auto no_fps_items = hardwarescope::BuildOsdDisplayItems(snapshot, settings);
-    Expect(no_fps_items.size() == 3U && std::none_of(no_fps_items.begin(), no_fps_items.end(), [](const auto& item) { return item.fps; }), "disabled FPS is absent from OSD");
+    Expect(no_fps_items.size() == 3U && std::none_of(no_fps_items.begin(), no_fps_items.end(), [](const auto& item) { return item.fps; }), "disabled FPS and 1% low are absent from OSD");
+}
+
+void TestOnePercentLowMath() {
+    std::array<double, 1'000U> intervals{};
+    intervals.fill(10.0);
+    for (std::size_t index{}; index < 10U; ++index) intervals[index] = 20.0;
+    Expect(hardwarescope::CalculateOnePercentLowFps(intervals.data(), intervals.size()) == 50U,
+        "1% low averages the slowest one percent of frame times");
+    std::array<double, 99U> short_capture{};
+    short_capture.fill(16.67);
+    Expect(hardwarescope::CalculateOnePercentLowFps(short_capture.data(), short_capture.size()) == 0U,
+        "1% low waits for a statistically useful frame sample");
 }
 
 void TestProcessorUsageMath() {
@@ -704,6 +733,7 @@ int main() {
     TestGpuAndBoardIdentityMappings();
     TestDdr5TemperatureConversion();
     TestFrameRateTracker();
+    TestOnePercentLowMath();
     TestGameClassification();
     TestStartupCommand();
     TestServiceBinaryPath();

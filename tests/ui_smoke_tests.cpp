@@ -144,6 +144,8 @@ int wmain(const int argument_count, wchar_t** arguments) {
             hardwarescope::kApplyMainDpiTestMessage,
             hardwarescope::kShowUpdatePromptTestMessage,
             hardwarescope::kQueueAutomaticUpdateNotificationTestMessage,
+            hardwarescope::kSelectSettingsTabTestMessage,
+            hardwarescope::kConfigureOsdGraphTestMessage,
         };
         for (const auto message : hook_messages) {
             if (SendMessageW(window, message, 144U, 0U) != 0) {
@@ -382,6 +384,20 @@ int wmain(const int argument_count, wchar_t** arguments) {
     }
     std::cout << "OK: native OSD is compact, taskbar-free, non-activating, and click-through\n";
 
+    if (SendMessageW(window, hardwarescope::kConfigureOsdGraphTestMessage, 1U, 0U) != 1) {
+        std::cerr << "FAIL: internal live-graph test hook could not select a sensor\n";
+        return 1;
+    }
+    Sleep(2'600U);
+    RECT graph_bounds{};
+    static_cast<void>(GetWindowRect(osd, &graph_bounds));
+    if (!IsWindowVisible(osd) || graph_bounds.bottom - graph_bounds.top < osd_bounds.bottom - osd_bounds.top + 30) {
+        std::cerr << "FAIL: live OSD graph did not create a visible fixed-history plot\n";
+        return 1;
+    }
+    static_cast<void>(SendMessageW(window, hardwarescope::kConfigureOsdGraphTestMessage, 0U, 0U));
+    std::cout << "OK: live OSD graph renders from a fixed sensor-history buffer\n";
+
     if (SendMessageW(window, hardwarescope::kRestoreTrayIconTestMessage, 0U, 0U) != 1
         || SendMessageW(window, hardwarescope::kQueryTrayIconAddedMessage, 0U, 0U) != 1) {
         std::cerr << "FAIL: notification icon could not be restored after a simulated Explorer restart\n";
@@ -426,12 +442,12 @@ int wmain(const int argument_count, wchar_t** arguments) {
     }
     const auto tabs = FindWindowExW(settings, nullptr, WC_TABCONTROLW, nullptr);
     const auto first_combo = FindWindowExW(settings, nullptr, WC_COMBOBOXW, nullptr);
-    const auto sensor_list = FindWindowExW(settings, nullptr, L"LISTBOX", nullptr);
+    const auto sensor_list = GetDlgItem(settings, hardwarescope::kSettingsSensorListControl);
     const auto update_button = GetDlgItem(settings, hardwarescope::kSettingsCheckUpdatesCommand);
     const auto export_button = GetDlgItem(settings, hardwarescope::kSettingsExportCommand);
     const auto import_button = GetDlgItem(settings, hardwarescope::kSettingsImportCommand);
     if (tabs == nullptr || first_combo == nullptr || sensor_list == nullptr || update_button == nullptr
-        || export_button == nullptr || import_button == nullptr || TabCtrl_GetItemCount(tabs) != 4
+        || export_button == nullptr || import_button == nullptr || TabCtrl_GetItemCount(tabs) != 5
         || (GetWindowLongPtrW(settings, GWL_STYLE) & WS_CLIPCHILDREN) == 0
         || (GetWindowLongPtrW(tabs, GWL_STYLE) & TCS_OWNERDRAWFIXED) == 0
         || (GetWindowLongPtrW(first_combo, GWL_STYLE) & CBS_OWNERDRAWFIXED) == 0
@@ -447,13 +463,14 @@ int wmain(const int argument_count, wchar_t** arguments) {
         std::cerr << "FAIL: Settings tab geometry is unavailable\n";
         return 1;
     }
-    const auto monitoring_tab_point = MAKELPARAM(
-        tab_client.left + (tab_client.right - tab_client.left) * 5 / 8,
-        tab_client.top + (tab_client.bottom - tab_client.top) / 2);
-    static_cast<void>(SendMessageW(tabs, WM_LBUTTONDOWN, MK_LBUTTON, monitoring_tab_point));
-    static_cast<void>(SendMessageW(tabs, WM_LBUTTONUP, 0U, monitoring_tab_point));
+    if (SendMessageW(settings, hardwarescope::kSelectSettingsTabTestMessage, 2U, 0U) != 3) {
+        std::cerr << "FAIL: internal Settings tab selection hook is unavailable\n";
+        return 1;
+    }
     if (TabCtrl_GetCurSel(tabs) != 2 || !IsWindowVisible(sensor_list)) {
-        std::cerr << "FAIL: Monitoring tab did not expose the Additional OSD Sensors list\n";
+        std::cerr << "FAIL: Monitoring tab did not expose the Additional OSD Sensors list (tab="
+                  << TabCtrl_GetCurSel(tabs) << ", list=" << sensor_list
+                  << ", visible=" << (sensor_list != nullptr && IsWindowVisible(sensor_list)) << ")\n";
         return 1;
     }
     RECT default_client{};

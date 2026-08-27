@@ -80,6 +80,18 @@ double Number(const std::string_view text) noexcept {
 
 } // namespace
 
+std::uint32_t CalculateOnePercentLowFps(double* const intervals, const std::size_t count) noexcept {
+    if (intervals == nullptr || count < 100U) return 0U;
+    const auto slow_count = std::max<std::size_t>(1U, (count + 99U) / 100U);
+    const auto slow_begin = intervals + (count - slow_count);
+    std::nth_element(intervals, slow_begin, intervals + count);
+    double total{};
+    for (auto* value = slow_begin; value != intervals + count; ++value) total += *value;
+    const auto average = total / static_cast<double>(slow_count);
+    if (!std::isfinite(average) || average <= 0.05) return 0U;
+    return static_cast<std::uint32_t>(std::clamp(std::llround(1'000.0 / average), 1LL, 9'999LL));
+}
+
 PresentMonFpsRunner::PresentMonFpsRunner() {
     CleanupOrphanedSessions();
 }
@@ -232,7 +244,7 @@ void PresentMonFpsRunner::RecordInterval(const double milliseconds, const std::u
     intervals_[insert] = milliseconds;
     interval_total_ += milliseconds;
     ++interval_count_;
-    while (interval_count_ > 2U && interval_total_ - intervals_[interval_first_] >= smoothing_milliseconds_.load(std::memory_order_acquire)) {
+    while (interval_count_ > 2U && interval_total_ - intervals_[interval_first_] >= kHistoryMilliseconds) {
         interval_total_ -= intervals_[interval_first_];
         interval_first_ = (interval_first_ + 1U) % intervals_.size();
         --interval_count_;
@@ -242,15 +254,47 @@ void PresentMonFpsRunner::RecordInterval(const double milliseconds, const std::u
 
 PresentMonFpsReading PresentMonFpsRunner::Snapshot() const noexcept {
     PresentMonFpsReading reading{};
-    const std::scoped_lock lock(mutex_);
-    const auto target = target_process_id_.load(std::memory_order_acquire);
-    if (target == 0U || interval_count_ < 2U || interval_total_ <= 0.05
-        || GetTickCount64() - last_frame_tick_ > 2'500U) return reading;
-    reading.available = true;
-    reading.frames_per_second = static_cast<std::uint32_t>(std::clamp(
-        std::llround(1'000.0 * static_cast<double>(interval_count_) / interval_total_), 1LL, 9'999LL));
-    reading.process_id = target;
-    reading.application = application_;
+    std::size_t percentile_count{};
+    const auto now = GetTickCount64();
+    {
+        const std::scoped_lock lock(mutex_);
+        const auto target = target_process_id_.load(std::memory_order_acquire);
+        if (target == 0U || interval_count_ < 2U || interval_total_ <= 0.05
+            || now - last_frame_tick_ > 2'500U) return reading;
+
+        const auto smoothing = static_cast<double>(smoothing_milliseconds_.load(std::memory_order_acquire));
+        double smoothing_total{};
+        std::size_t smoothing_count{};
+        for (std::size_t offset{}; offset < interval_count_; ++offset) {
+            const auto index = (interval_first_ + interval_count_ - 1U - offset) % intervals_.size();
+            smoothing_total += intervals_[index];
+            ++smoothing_count;
+            if (smoothing_total >= smoothing) break;
+        }
+        if (smoothing_count == 0U || smoothing_total <= 0.05) return reading;
+        reading.available = true;
+        reading.frames_per_second = static_cast<std::uint32_t>(std::clamp(
+            std::llround(1'000.0 * static_cast<double>(smoothing_count) / smoothing_total), 1LL, 9'999LL));
+        reading.frame_time_milliseconds = intervals_[(interval_first_ + interval_count_ - 1U) % intervals_.size()];
+        reading.one_percent_low_frames_per_second = cached_one_percent_low_;
+        reading.process_id = target;
+        reading.application = application_;
+        if (last_percentile_tick_ == 0U || now - last_percentile_tick_ >= 1'000U) {
+            percentile_count = interval_count_;
+            for (std::size_t index{}; index < percentile_count; ++index) {
+                percentile_scratch_[index] = intervals_[(interval_first_ + index) % intervals_.size()];
+            }
+            last_percentile_tick_ = now;
+        }
+    }
+    if (percentile_count != 0U) {
+        const auto low = CalculateOnePercentLowFps(percentile_scratch_.data(), percentile_count);
+        const std::scoped_lock lock(mutex_);
+        if (reading.process_id == target_process_id_.load(std::memory_order_acquire)) {
+            cached_one_percent_low_ = low;
+            reading.one_percent_low_frames_per_second = low;
+        }
+    }
     return reading;
 }
 
@@ -276,6 +320,8 @@ void PresentMonFpsRunner::Stop() noexcept {
     interval_count_ = 0U;
     interval_total_ = 0.0;
     last_frame_tick_ = 0U;
+    last_percentile_tick_ = 0U;
+    cached_one_percent_low_ = 0U;
     application_ = {};
 }
 

@@ -189,6 +189,7 @@ const wchar_t* UnitSuffix(const SensorUnit unit) noexcept {
     case SensorUnit::volts: return L" V";
     case SensorUnit::megabytes: return L" MB";
     case SensorUnit::frames_per_second: return L" FPS";
+    case SensorUnit::milliseconds: return L" ms";
     }
     return L"";
 }
@@ -570,6 +571,26 @@ LRESULT NativeWindow::WindowProcedure(const UINT message, const WPARAM wparam, c
         completion.manifest.version = SemanticVersion{9U, 9U, 9U};
         pending_update_ = completion;
         return ShowUpdateNotification(completion) ? 1 : 0;
+    }
+    case kConfigureOsdGraphTestMessage: {
+        settings_.osd_graph_enabled = wparam != 0U;
+        if (settings_.osd_graph_enabled) {
+            const auto end = ui_snapshot_.sensors.begin() + ui_snapshot_.count;
+            const auto source = std::find_if(ui_snapshot_.sensors.begin(), end, [](const SensorValue& sensor) {
+                return sensor.available && sensor.kind != SensorKind::frame_rate;
+            });
+            if (source == end) return 0;
+            settings_.osd_graph_sensor_id = source->id;
+            settings_.osd_graph_history_seconds = 5U;
+            settings_.osd_graph_refresh_interval_ms = 100U;
+            settings_.osd_graph_width_px = 240U;
+            settings_.osd_graph_height_px = 64U;
+        }
+        osd_window_.ApplySettings(settings_);
+        fps_osd_window_.ApplySettings(settings_);
+        osd_window_.Update(ui_snapshot_);
+        fps_osd_window_.Update(ui_snapshot_);
+        return 1;
     }
 #endif
     case kTrayMessage: {

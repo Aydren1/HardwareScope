@@ -5,6 +5,8 @@
 
 #include <windows.h>
 
+#include <array>
+
 namespace hardwarescope {
 
 enum class OsdWindowRole : std::uint8_t {
@@ -42,6 +44,9 @@ private:
     [[nodiscard]] int ScaleForDpi(int value) const noexcept;
     void Render() noexcept;
     void Position(int width, int height) noexcept;
+    void UpdateGraphHistory(const SensorSnapshot& snapshot) noexcept;
+    [[nodiscard]] const SensorValue* GraphSensor(const SensorSnapshot& snapshot) const noexcept;
+    [[nodiscard]] bool GraphBelongsOnThisSurface() const noexcept;
 
     HINSTANCE instance_{};
     OsdWindowRole role_{OsdWindowRole::primary};
@@ -58,6 +63,13 @@ private:
     HFONT fps_font_{};
     AppSettings settings_{};
     SensorSnapshot snapshot_{};
+    static constexpr std::size_t kMaximumGraphSamples = 600U;
+    std::array<double, kMaximumGraphSamples> graph_samples_{};
+    std::size_t graph_first_{};
+    std::size_t graph_count_{};
+    std::uint64_t graph_sensor_id_{};
+    std::uint64_t graph_snapshot_sequence_{};
+    ULONGLONG last_graph_sample_tick_{};
     bool visible_{};
 };
 

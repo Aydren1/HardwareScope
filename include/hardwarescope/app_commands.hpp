@@ -10,6 +10,7 @@ constexpr int kCommandInstallUpdate = 1'005;
 constexpr int kSettingsCheckUpdatesCommand = 3;
 constexpr int kSettingsExportCommand = 4;
 constexpr int kSettingsImportCommand = 5;
+constexpr int kSettingsSensorListControl = 20;
 constexpr int kUpdateNowButton = 1'001;
 constexpr int kUpdateLaterButton = 1'002;
 constexpr int kUpdateIn24HoursRadio = 2'001;
@@ -29,5 +30,7 @@ constexpr unsigned int kApplySettingsDpiTestMessage = 0x8000U + 69U;
 constexpr unsigned int kQuerySnapshotSequenceMessage = 0x8000U + 70U;
 constexpr unsigned int kShowUpdatePromptTestMessage = 0x8000U + 71U;
 constexpr unsigned int kQueueAutomaticUpdateNotificationTestMessage = 0x8000U + 72U;
+constexpr unsigned int kSelectSettingsTabTestMessage = 0x8000U + 73U;
+constexpr unsigned int kConfigureOsdGraphTestMessage = 0x8000U + 74U;
 
 } // namespace hardwarescope

@@ -33,6 +33,8 @@ std::wstring SensorExplanation(const SensorValue& sensor) {
     if (Contains(name, L"Drive composite")) return L"The drive's primary combined temperature reading reported by its firmware.";
     if (Contains(name, L"Drive temperature sensor")) return L"An additional physical temperature sensor exposed by this drive.";
     if (Contains(name, L"DIMM") && sensor.kind == SensorKind::temperature) return L"Temperature reported by the thermal sensor on this memory module.";
+    if (sensor.id == kFpsOnePercentLowSensorId) return L"Average frame rate across the slowest one percent of recent frames. Lower values reveal stutter.";
+    if (sensor.id == kFpsFrameTimeSensorId) return L"Time used to present the latest game frame. Lower and steadier values feel smoother.";
     if (sensor.kind == SensorKind::frame_rate) return L"Frames presented each second by the active game, measured from native Windows graphics events.";
     if (sensor.kind == SensorKind::fan) return L"The measured rotational speed of this cooling fan.";
     if (sensor.kind == SensorKind::clock) return L"The current operating frequency reported for this processor or graphics clock domain.";

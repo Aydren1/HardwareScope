@@ -76,7 +76,7 @@ int RunCollector(const HINSTANCE resources, HANDLE const requested_stop, const D
         const auto fps = fps_runner.Snapshot();
         if (fps.available && snapshot->count < snapshot->sensors.size()) {
             auto& sensor = snapshot->sensors[snapshot->count++];
-            sensor.id = 0x0000'0000'0000'0001ULL;
+            sensor.id = hardwarescope::kFpsSensorId;
             sensor.kind = hardwarescope::SensorKind::frame_rate;
             sensor.unit = hardwarescope::SensorUnit::frames_per_second;
             sensor.available = true;
@@ -85,6 +85,31 @@ int RunCollector(const HINSTANCE resources, HANDLE const requested_stop, const D
             sensor.current = fps.frames_per_second;
             sensor.minimum = fps.frames_per_second;
             sensor.maximum = fps.frames_per_second;
+
+            if (fps.one_percent_low_frames_per_second != 0U && snapshot->count < snapshot->sensors.size()) {
+                auto& low = snapshot->sensors[snapshot->count++];
+                low.id = hardwarescope::kFpsOnePercentLowSensorId;
+                low.kind = hardwarescope::SensorKind::frame_rate;
+                low.unit = hardwarescope::SensorUnit::frames_per_second;
+                low.available = true;
+                static_cast<void>(wcsncpy_s(low.name.data(), low.name.size(), L"1% low frame rate", _TRUNCATE));
+                static_cast<void>(wcsncpy_s(low.hardware.data(), low.hardware.size(), fps.application.data(), _TRUNCATE));
+                low.current = fps.one_percent_low_frames_per_second;
+                low.minimum = fps.one_percent_low_frames_per_second;
+                low.maximum = fps.one_percent_low_frames_per_second;
+            }
+            if (fps.frame_time_milliseconds > 0.0 && snapshot->count < snapshot->sensors.size()) {
+                auto& frame_time = snapshot->sensors[snapshot->count++];
+                frame_time.id = hardwarescope::kFpsFrameTimeSensorId;
+                frame_time.kind = hardwarescope::SensorKind::frame_rate;
+                frame_time.unit = hardwarescope::SensorUnit::milliseconds;
+                frame_time.available = true;
+                static_cast<void>(wcsncpy_s(frame_time.name.data(), frame_time.name.size(), L"Frame time", _TRUNCATE));
+                static_cast<void>(wcsncpy_s(frame_time.hardware.data(), frame_time.hardware.size(), fps.application.data(), _TRUNCATE));
+                frame_time.current = fps.frame_time_milliseconds;
+                frame_time.minimum = fps.frame_time_milliseconds;
+                frame_time.maximum = fps.frame_time_milliseconds;
+            }
         }
         QueryPerformanceCounter(&after);
         if (frequency.QuadPart > 0) {

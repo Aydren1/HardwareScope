@@ -12,6 +12,9 @@ namespace hardwarescope {
 constexpr std::size_t kMaxSensors = 512;
 constexpr std::size_t kSensorNameLength = 64;
 constexpr std::size_t kHardwareNameLength = 64;
+inline constexpr std::uint64_t kFpsSensorId = 0x0000'0000'0000'0001ULL;
+inline constexpr std::uint64_t kFpsOnePercentLowSensorId = 0x0000'0000'0000'0002ULL;
+inline constexpr std::uint64_t kFpsFrameTimeSensorId = 0x0000'0000'0000'0003ULL;
 
 enum class SensorKind : std::uint8_t {
     temperature,
@@ -33,6 +36,7 @@ enum class SensorUnit : std::uint8_t {
     volts,
     megabytes,
     frames_per_second,
+    milliseconds,
 };
 
 struct SensorValue final {
