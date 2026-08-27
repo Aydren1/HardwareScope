@@ -1,6 +1,7 @@
 #pragma once
 
 #include "hardwarescope/app_settings.hpp"
+#include "hardwarescope/graph_window.hpp"
 #include "hardwarescope/osd_window.hpp"
 #include "hardwarescope/sensor_snapshot.hpp"
 #include "hardwarescope/sensor_explanations.hpp"
@@ -121,6 +122,7 @@ private:
     SettingsStore settings_store_;
     OsdWindow osd_window_;
     OsdWindow fps_osd_window_;
+    GraphWindow graph_window_;
 
     Microsoft::WRL::ComPtr<ID2D1Factory> d2d_factory_{};
     Microsoft::WRL::ComPtr<IDWriteFactory> dwrite_factory_{};

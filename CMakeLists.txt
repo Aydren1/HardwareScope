@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.28)
 
-project(HardwareScopeNative VERSION 2.0.7 LANGUAGES CXX RC)
+project(HardwareScopeNative VERSION 2.0.8 LANGUAGES CXX RC)
 
 configure_file(installer/HardwareScope.iss.in HardwareScope.iss @ONLY)
 configure_file(resources/HardwareScopeVersion.rc.in HardwareScopeVersion.rc @ONLY)
@@ -23,6 +23,7 @@ add_library(hardwarescope_core STATIC
     src/file_verification.cpp
     src/frame_rate_tracker.cpp
     src/game_detector.cpp
+    src/graph_model.cpp
     src/legacy_settings_migration.cpp
     src/osd_model.cpp
     src/nvidia_gpu_provider.cpp
@@ -58,6 +59,7 @@ target_link_libraries(hardwarescope_core PUBLIC shell32 ole32 powrprof advapi32 
 
 set(HARDWARESCOPE_APP_SOURCES
     src/main.cpp
+    src/graph_window.cpp
     src/native_window.cpp
     src/osd_window.cpp
     src/settings_window.cpp

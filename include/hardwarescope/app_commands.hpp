@@ -32,5 +32,8 @@ constexpr unsigned int kShowUpdatePromptTestMessage = 0x8000U + 71U;
 constexpr unsigned int kQueueAutomaticUpdateNotificationTestMessage = 0x8000U + 72U;
 constexpr unsigned int kSelectSettingsTabTestMessage = 0x8000U + 73U;
 constexpr unsigned int kConfigureOsdGraphTestMessage = 0x8000U + 74U;
+constexpr unsigned int kGraphWindowClosedMessage = 0x8000U + 75U;
+constexpr unsigned int kGraphWindowPlacementChangedMessage = 0x8000U + 76U;
+constexpr unsigned int kConfigureFloatingGraphTestMessage = 0x8000U + 77U;
 
 } // namespace hardwarescope

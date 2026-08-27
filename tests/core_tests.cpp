@@ -4,6 +4,7 @@
 #include "hardwarescope/frame_rate_tracker.hpp"
 #include "hardwarescope/file_verification.hpp"
 #include "hardwarescope/game_detector.hpp"
+#include "hardwarescope/graph_model.hpp"
 #include "hardwarescope/legacy_settings_migration.hpp"
 #include "hardwarescope/osd_model.hpp"
 #include "hardwarescope/presentmon_fps_runner.hpp"
@@ -140,6 +141,50 @@ void TestSensorPublishCadence() {
         "disabled FPS never accelerates sensor publishing");
 }
 
+void TestGraphHistory() {
+    hardwarescope::AppSettings settings{};
+    settings.osd_graph_sensor_ids = {101U, 102U, 0U, 0U};
+    settings.osd_graph_sensor_count = 2U;
+    settings.osd_graph_history_seconds = 5U;
+    settings.osd_graph_refresh_interval_ms = 100U;
+    settings.osd_graph_scale_mode = hardwarescope::GraphScaleMode::fixed;
+    hardwarescope::GraphHistory history;
+    history.Configure(settings);
+
+    hardwarescope::SensorSnapshot snapshot{};
+    snapshot.count = 2U;
+    snapshot.sensors[0].id = 101U;
+    snapshot.sensors[0].kind = hardwarescope::SensorKind::temperature;
+    snapshot.sensors[0].unit = hardwarescope::SensorUnit::celsius;
+    snapshot.sensors[0].available = true;
+    static_cast<void>(wcscpy_s(snapshot.sensors[0].name.data(), snapshot.sensors[0].name.size(), L"CPU temperature"));
+    snapshot.sensors[1] = snapshot.sensors[0];
+    snapshot.sensors[1].id = 102U;
+    static_cast<void>(wcscpy_s(snapshot.sensors[1].name.data(), snapshot.sensors[1].name.size(), L"GPU temperature"));
+    for (std::uint64_t sample{}; sample < 60U; ++sample) {
+        snapshot.sequence = sample + 1U;
+        snapshot.sensors[0].current = 40.0 + static_cast<double>(sample % 10U);
+        snapshot.sensors[1].current = 55.0 + static_cast<double>(sample % 5U);
+        history.Update(snapshot, 1'000U + sample * 100U);
+    }
+    Expect(history.SeriesCount() == 2U, "graph history supports synchronized multi-sensor series");
+    Expect(history.Series(0).count == 50U && history.Series(1).count == 50U,
+        "graph history scrolls within its fixed time window");
+    Expect(std::abs(history.Series(0).Sample(49U) - 49.0) < 0.001,
+        "graph history keeps the newest sample on the right edge");
+    Expect(history.Series(0).Timestamp(49U) == 6'900U,
+        "graph history retains actual timestamps for a stable time axis");
+    const auto fixed = history.Range();
+    Expect(fixed.minimum == 20.0 && fixed.maximum == 100.0,
+        "temperature graphs use a stable sensor-aware fixed range");
+    history.SetPaused(true);
+    snapshot.sequence = 100U;
+    history.Update(snapshot, 8'000U);
+    Expect(history.Series(0).count == 50U, "paused graphs stop accepting new samples");
+    history.Clear();
+    Expect(history.Series(0).count == 0U, "graph reset clears every series without reallocating");
+}
+
 void TestSettingsStore() {
     namespace fs = std::filesystem;
     auto path = fs::temp_directory_path() / (L"HardwareScopeNativeSettings-" + std::to_wstring(GetCurrentProcessId()) + L".ini");
@@ -172,10 +217,25 @@ void TestSettingsStore() {
     settings.fps_one_percent_low_enabled = false;
     settings.osd_graph_enabled = true;
     settings.osd_graph_sensor_id = 0x1234'5678'9ABC'DEF0ULL;
+    settings.osd_graph_sensor_ids = {0x1234'5678'9ABC'DEF0ULL, 77U, 0U, 0U};
+    settings.osd_graph_sensor_count = 2U;
     settings.osd_graph_history_seconds = 999U;
     settings.osd_graph_refresh_interval_ms = 1U;
     settings.osd_graph_width_px = 999U;
     settings.osd_graph_height_px = 1U;
+    settings.osd_graph_scale_mode = hardwarescope::GraphScaleMode::custom;
+    settings.osd_graph_custom_minimum = -25.5;
+    settings.osd_graph_custom_maximum = 175.25;
+    settings.osd_graph_line_thickness_px = 99U;
+    settings.osd_graph_grid = false;
+    settings.osd_graph_labels = false;
+    settings.osd_graph_colors_rgb[1] = 0x1ABCDEFU;
+    settings.floating_graph_enabled = true;
+    settings.floating_graph_topmost = false;
+    settings.floating_graph_x = 321;
+    settings.floating_graph_y = 123;
+    settings.floating_graph_width_px = 99U;
+    settings.floating_graph_height_px = 9'999U;
     settings.automatic_updates = false;
     settings.update_snooze_until_unix_seconds = 4'102'444'800ULL;
     settings.skipped_update_major = 2U;
@@ -225,9 +285,21 @@ void TestSettingsStore() {
     Expect(!loaded.fps_one_percent_low_enabled, "rolling 1% low visibility round-trips");
     Expect(loaded.osd_graph_enabled && loaded.osd_graph_sensor_id == 0x1234'5678'9ABC'DEF0ULL,
         "the live graph and its 64-bit sensor identity round-trip");
-    Expect(loaded.osd_graph_history_seconds == 60U && loaded.osd_graph_refresh_interval_ms == 100U
-            && loaded.osd_graph_width_px == 480U && loaded.osd_graph_height_px == 40U,
-        "live graph history, refresh, and dimensions clamp to lightweight limits");
+    Expect(loaded.osd_graph_sensor_count == 2U && loaded.osd_graph_sensor_ids[1] == 77U,
+        "multiple graph sensor identities round-trip");
+    Expect(loaded.osd_graph_history_seconds == 300U && loaded.osd_graph_refresh_interval_ms == 50U
+            && loaded.osd_graph_width_px == 960U && loaded.osd_graph_height_px == 64U,
+        "graph history, refresh, and dimensions clamp to supported limits");
+    Expect(loaded.osd_graph_scale_mode == hardwarescope::GraphScaleMode::custom
+            && loaded.osd_graph_custom_minimum == -25.5 && loaded.osd_graph_custom_maximum == 175.25,
+        "custom graph scale round-trips without losing precision");
+    Expect(loaded.osd_graph_line_thickness_px == 4U && !loaded.osd_graph_grid && !loaded.osd_graph_labels
+            && loaded.osd_graph_colors_rgb[1] == 0xABCDEFU,
+        "graph styling controls normalize and round-trip");
+    Expect(loaded.floating_graph_enabled && !loaded.floating_graph_topmost
+            && loaded.floating_graph_x == 321 && loaded.floating_graph_y == 123
+            && loaded.floating_graph_width_px == 360U && loaded.floating_graph_height_px == 1'440U,
+        "floating graph layout and behavior round-trip");
     Expect(!loaded.automatic_updates, "update preference round-trips");
     Expect(loaded.update_snooze_until_unix_seconds == 4'102'444'800ULL,
         "update reminder time round-trips without precision loss");
@@ -724,6 +796,7 @@ int main() {
     TestSnapshotStore();
     TestSensorWorker();
     TestSensorPublishCadence();
+    TestGraphHistory();
     TestSettingsStore();
     TestOsdModel();
     TestProcessorUsageMath();

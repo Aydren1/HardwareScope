@@ -25,6 +25,12 @@ enum class OsdLayout : std::uint8_t {
     horizontal,
 };
 
+enum class GraphScaleMode : std::uint8_t {
+    fixed,
+    adaptive,
+    custom,
+};
+
 enum EasyTemperature : std::uint32_t {
     easy_cpu_package = 1U << 0U,
     easy_gpu_core = 1U << 1U,
@@ -32,9 +38,10 @@ enum EasyTemperature : std::uint32_t {
 };
 
 struct AppSettings final {
-    static constexpr std::uint32_t kSchemaVersion = 5U;
+    static constexpr std::uint32_t kSchemaVersion = 6U;
     static constexpr std::size_t kMaximumPinnedSensors = 64U;
     static constexpr std::size_t kMaximumFavoriteSensors = 64U;
+    static constexpr std::size_t kMaximumGraphSensors = 4U;
     static constexpr std::uint32_t kMatchAccentColor = 0x01000000U;
 
     std::uint32_t refresh_interval_ms{750U};
@@ -81,10 +88,26 @@ struct AppSettings final {
 
     bool osd_graph_enabled{};
     std::uint64_t osd_graph_sensor_id{3U};
+    std::array<std::uint64_t, kMaximumGraphSensors> osd_graph_sensor_ids{3U, 0U, 0U, 0U};
+    std::uint32_t osd_graph_sensor_count{1U};
     std::uint32_t osd_graph_history_seconds{30U};
     std::uint32_t osd_graph_refresh_interval_ms{100U};
     std::uint32_t osd_graph_width_px{240U};
     std::uint32_t osd_graph_height_px{64U};
+    GraphScaleMode osd_graph_scale_mode{GraphScaleMode::fixed};
+    double osd_graph_custom_minimum{};
+    double osd_graph_custom_maximum{100.0};
+    std::uint32_t osd_graph_line_thickness_px{2U};
+    bool osd_graph_grid{true};
+    bool osd_graph_labels{true};
+    std::array<std::uint32_t, kMaximumGraphSensors> osd_graph_colors_rgb{
+        0x52E0D4U, 0xFFB347U, 0xFFD84DU, 0xFF5A67U};
+    bool floating_graph_enabled{};
+    bool floating_graph_topmost{true};
+    std::int32_t floating_graph_x{-1};
+    std::int32_t floating_graph_y{-1};
+    std::uint32_t floating_graph_width_px{720U};
+    std::uint32_t floating_graph_height_px{360U};
 
     bool automatic_updates{true};
     std::uint64_t update_snooze_until_unix_seconds{};

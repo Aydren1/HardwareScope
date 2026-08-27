@@ -16,6 +16,7 @@ namespace {
 constexpr wchar_t kWindowClass[] = L"HardwareScope.Native.MainWindow";
 constexpr wchar_t kOsdWindowClass[] = L"HardwareScope.Native.OsdWindow";
 constexpr wchar_t kSettingsWindowClass[] = L"HardwareScope.Native.SettingsWindow";
+constexpr wchar_t kGraphWindowClass[] = L"HardwareScope.Native.GraphWindow";
 
 struct MonitorCollection final {
     std::array<RECT, 8U> work_areas{};
@@ -146,6 +147,7 @@ int wmain(const int argument_count, wchar_t** arguments) {
             hardwarescope::kQueueAutomaticUpdateNotificationTestMessage,
             hardwarescope::kSelectSettingsTabTestMessage,
             hardwarescope::kConfigureOsdGraphTestMessage,
+            hardwarescope::kConfigureFloatingGraphTestMessage,
         };
         for (const auto message : hook_messages) {
             if (SendMessageW(window, message, 144U, 0U) != 0) {
@@ -397,6 +399,29 @@ int wmain(const int argument_count, wchar_t** arguments) {
     }
     static_cast<void>(SendMessageW(window, hardwarescope::kConfigureOsdGraphTestMessage, 0U, 0U));
     std::cout << "OK: live OSD graph renders from a fixed sensor-history buffer\n";
+
+    if (SendMessageW(window, hardwarescope::kConfigureFloatingGraphTestMessage, 1U, 0U) != 1) {
+        std::cerr << "FAIL: internal floating-graph test hook could not select a sensor\n";
+        return 1;
+    }
+    Sleep(250U);
+    const auto graph_window = FindWindowW(kGraphWindowClass, nullptr);
+    RECT floating_bounds{};
+    if (graph_window == nullptr || !IsWindowVisible(graph_window)
+        || !GetWindowRect(graph_window, &floating_bounds)
+        || floating_bounds.right - floating_bounds.left < 360
+        || floating_bounds.bottom - floating_bounds.top < 220) {
+        std::cerr << "FAIL: detachable graph window was not visible or correctly sized\n";
+        return 1;
+    }
+    InvalidateRect(graph_window, nullptr, FALSE);
+    UpdateWindow(graph_window);
+    static_cast<void>(SendMessageW(window, hardwarescope::kConfigureFloatingGraphTestMessage, 0U, 0U));
+    if (IsWindowVisible(graph_window)) {
+        std::cerr << "FAIL: disabling the detachable graph window did not hide it\n";
+        return 1;
+    }
+    std::cout << "OK: detachable native graph window opens, paints, sizes, and hides\n";
 
     if (SendMessageW(window, hardwarescope::kRestoreTrayIconTestMessage, 0U, 0U) != 1
         || SendMessageW(window, hardwarescope::kQueryTrayIconAddedMessage, 0U, 0U) != 1) {

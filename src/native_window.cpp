@@ -216,7 +216,8 @@ NativeWindow::NativeWindow(const HINSTANCE instance) noexcept
       sensor_worker_(snapshots_, &NativeWindow::SnapshotPublished, this, SensorWorkerMode::native, instance),
       settings_store_(SettingsStore::DefaultPath()),
       osd_window_(instance, OsdWindowRole::primary),
-      fps_osd_window_(instance, OsdWindowRole::fps) {
+      fps_osd_window_(instance, OsdWindowRole::fps),
+      graph_window_(instance) {
     const auto settings_loaded = settings_store_.Load(settings_);
     if (!settings_loaded) {
         auto legacy_path = settings_store_.Path().parent_path();
@@ -321,6 +322,7 @@ bool NativeWindow::CreateNativeWindow(const int show_command) {
     static_cast<void>(AddTrayIcon());
     if (!osd_window_.Initialize(window_, settings_)) return false;
     if (!fps_osd_window_.Initialize(window_, settings_)) return false;
+    if (!graph_window_.Initialize(window_, settings_)) return false;
     if (!first_run_) ScheduleAutomaticUpdateCheck();
     if (settings_.start_minimized) {
         ShowWindow(window_, SW_HIDE);
@@ -407,6 +409,7 @@ LRESULT NativeWindow::WindowProcedure(const UINT message, const WPARAM wparam, c
     case WM_DISPLAYCHANGE:
         osd_window_.DisplayChanged();
         fps_osd_window_.DisplayChanged();
+        graph_window_.DisplayChanged();
         InvalidateRect(window_, nullptr, FALSE);
         return 0;
     case WM_POWERBROADCAST:
@@ -581,6 +584,8 @@ LRESULT NativeWindow::WindowProcedure(const UINT message, const WPARAM wparam, c
             });
             if (source == end) return 0;
             settings_.osd_graph_sensor_id = source->id;
+            settings_.osd_graph_sensor_ids = {source->id, 0U, 0U, 0U};
+            settings_.osd_graph_sensor_count = 1U;
             settings_.osd_graph_history_seconds = 5U;
             settings_.osd_graph_refresh_interval_ms = 100U;
             settings_.osd_graph_width_px = 240U;
@@ -592,7 +597,35 @@ LRESULT NativeWindow::WindowProcedure(const UINT message, const WPARAM wparam, c
         fps_osd_window_.Update(ui_snapshot_);
         return 1;
     }
+    case kConfigureFloatingGraphTestMessage: {
+        settings_.floating_graph_enabled = wparam != 0U;
+        if (settings_.floating_graph_enabled) {
+            const auto end = ui_snapshot_.sensors.begin() + ui_snapshot_.count;
+            const auto source = std::find_if(ui_snapshot_.sensors.begin(), end, [](const SensorValue& sensor) {
+                return sensor.available && sensor.kind != SensorKind::frame_rate;
+            });
+            if (source == end) return 0;
+            settings_.osd_graph_sensor_id = source->id;
+            settings_.osd_graph_sensor_ids = {source->id, 0U, 0U, 0U};
+            settings_.osd_graph_sensor_count = 1U;
+            settings_.osd_graph_history_seconds = 5U;
+            settings_.osd_graph_refresh_interval_ms = 100U;
+            settings_.floating_graph_width_px = 560U;
+            settings_.floating_graph_height_px = 300U;
+        }
+        graph_window_.ApplySettings(settings_);
+        graph_window_.Update(ui_snapshot_);
+        return 1;
+    }
 #endif
+    case kGraphWindowClosedMessage:
+        settings_.floating_graph_enabled = false;
+        static_cast<void>(settings_store_.Save(settings_));
+        return 0;
+    case kGraphWindowPlacementChangedMessage:
+        graph_window_.CapturePlacement(settings_);
+        static_cast<void>(settings_store_.Save(settings_));
+        return 0;
     case kTrayMessage: {
         const auto tray_event = static_cast<UINT>(LOWORD(lparam));
         if (tray_event == NIN_BALLOONUSERCLICK) PromptForPendingUpdate();
@@ -617,6 +650,8 @@ LRESULT NativeWindow::WindowProcedure(const UINT message, const WPARAM wparam, c
         return 0;
     case WM_DESTROY:
         sensor_worker_.Stop();
+        graph_window_.CapturePlacement(settings_);
+        static_cast<void>(settings_store_.Save(settings_));
         RemoveTrayIcon();
         PostQuitMessage(0);
         return 0;
@@ -642,6 +677,7 @@ void NativeWindow::HandleSnapshotMessage() noexcept {
     if (InitializeDefaultFavorites(ui_snapshot_, settings_)) static_cast<void>(settings_store_.Save(settings_));
     osd_window_.Update(ui_snapshot_);
     fps_osd_window_.Update(ui_snapshot_);
+    graph_window_.Update(ui_snapshot_);
     if (resume_waiting_for_snapshot_) {
         resume_waiting_for_snapshot_ = false;
         osd_window_.SetVisible(settings_.show_osd);
@@ -1284,7 +1320,7 @@ void NativeWindow::ShowTrayMenu() noexcept {
         wchar_t update_text[96]{};
         static_cast<void>(swprintf_s(
             update_text,
-            L"Install update %u.%u.%uâ€¦",
+            L"Install update %u.%u.%u…",
             pending_update_->manifest.version.major,
             pending_update_->manifest.version.minor,
             pending_update_->manifest.version.patch));
@@ -1319,6 +1355,7 @@ void NativeWindow::HandleCommand(const int command) noexcept {
 
 void NativeWindow::ShowSettings() noexcept {
     auto updated = settings_;
+    graph_window_.CapturePlacement(updated);
     snapshots_.ReadLatest(ui_snapshot_);
     if (!ShowSettingsWindow(window_, updated, ui_snapshot_)) return;
     settings_ = updated;
@@ -1327,6 +1364,7 @@ void NativeWindow::ShowSettings() noexcept {
     static_cast<void>(ApplyStartupRegistration(settings_.start_with_windows, settings_.start_minimized));
     osd_window_.ApplySettings(settings_);
     fps_osd_window_.ApplySettings(settings_);
+    graph_window_.ApplySettings(settings_);
     sensor_worker_.Stop();
     sensor_worker_.ConfigureFps(
         settings_.fps_enabled,

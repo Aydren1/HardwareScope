@@ -96,26 +96,17 @@ LRESULT CALLBACK OsdWindow::WindowProcedure(const HWND window, const UINT messag
 void OsdWindow::ApplySettings(const AppSettings& settings) noexcept {
     const bool fonts_changed = settings.osd_scale_percent != settings_.osd_scale_percent
         || settings.fps_scale_percent != settings_.fps_scale_percent;
-    const bool graph_changed = settings.osd_graph_sensor_id != settings_.osd_graph_sensor_id
-        || settings.osd_graph_history_seconds != settings_.osd_graph_history_seconds
-        || settings.osd_graph_refresh_interval_ms != settings_.osd_graph_refresh_interval_ms
-        || (!settings.osd_graph_enabled && settings_.osd_graph_enabled);
     settings_ = settings;
     if (fonts_changed) RecreateFonts();
-    if (graph_changed) {
-        graph_first_ = 0U;
-        graph_count_ = 0U;
-        graph_sensor_id_ = settings_.osd_graph_sensor_id;
-        graph_snapshot_sequence_ = 0U;
-        last_graph_sample_tick_ = 0U;
-    }
+    graph_history_.Configure(settings_);
+    if (!settings_.osd_graph_enabled) graph_history_.Clear();
     visible_ = settings_.show_osd;
     Render();
 }
 
 void OsdWindow::Update(const SensorSnapshot& snapshot) noexcept {
     CopySnapshot(snapshot, snapshot_);
-    UpdateGraphHistory(snapshot_);
+    if (GraphBelongsOnThisSurface()) graph_history_.Update(snapshot_, GetTickCount64());
     Render();
 }
 
@@ -172,57 +163,23 @@ void OsdWindow::DestroySurface() noexcept {
 }
 
 bool OsdWindow::GraphBelongsOnThisSurface() const noexcept {
-    if (!settings_.osd_graph_enabled) return false;
-    const auto fps_graph = settings_.osd_graph_sensor_id == kFpsFrameTimeSensorId;
+    if (!settings_.osd_graph_enabled || settings_.osd_graph_sensor_count == 0U) return false;
+    const auto primary_id = settings_.osd_graph_sensor_ids[0];
+    const auto fps_graph = primary_id == kFpsSensorId
+        || primary_id == kFpsOnePercentLowSensorId
+        || primary_id == kFpsFrameTimeSensorId;
     if (fps_graph) return settings_.fps_separate_position
         ? role_ == OsdWindowRole::fps
         : role_ == OsdWindowRole::primary;
     return role_ == OsdWindowRole::primary;
 }
 
-const SensorValue* OsdWindow::GraphSensor(const SensorSnapshot& snapshot) const noexcept {
-    if (!GraphBelongsOnThisSurface()) return nullptr;
-    for (std::uint32_t index{}; index < snapshot.count; ++index) {
-        const auto& sensor = snapshot.sensors[index];
-        if (sensor.id == settings_.osd_graph_sensor_id && sensor.available && std::isfinite(sensor.current)) return &sensor;
-    }
-    return nullptr;
-}
-
-void OsdWindow::UpdateGraphHistory(const SensorSnapshot& snapshot) noexcept {
-    if (!GraphBelongsOnThisSurface() || snapshot.sequence == 0U || snapshot.sequence == graph_snapshot_sequence_) return;
-    graph_snapshot_sequence_ = snapshot.sequence;
-    if (graph_sensor_id_ != settings_.osd_graph_sensor_id) {
-        graph_first_ = 0U;
-        graph_count_ = 0U;
-        graph_sensor_id_ = settings_.osd_graph_sensor_id;
-        last_graph_sample_tick_ = 0U;
-    }
-    const auto* const sensor = GraphSensor(snapshot);
-    if (sensor == nullptr) return;
-    const auto now = GetTickCount64();
-    if (last_graph_sample_tick_ != 0U
-        && now - last_graph_sample_tick_ < settings_.osd_graph_refresh_interval_ms) return;
-    last_graph_sample_tick_ = now;
-    const auto desired = std::clamp<std::size_t>(
-        static_cast<std::size_t>(settings_.osd_graph_history_seconds) * 1'000U
-            / settings_.osd_graph_refresh_interval_ms,
-        2U,
-        graph_samples_.size());
-    while (graph_count_ >= desired) {
-        graph_first_ = (graph_first_ + 1U) % graph_samples_.size();
-        --graph_count_;
-    }
-    const auto insert = (graph_first_ + graph_count_) % graph_samples_.size();
-    graph_samples_[insert] = sensor->current;
-    ++graph_count_;
-}
-
 void OsdWindow::Render() noexcept {
     if (window_ == nullptr || !visible_) return;
     const auto items = BuildOsdSurfaceItems(snapshot_, settings_, role_ == OsdWindowRole::fps);
-    const auto* const graph_sensor = GraphSensor(snapshot_);
-    const auto draw_graph = graph_sensor != nullptr && graph_count_ >= 2U;
+    const auto draw_graph = GraphBelongsOnThisSurface()
+        && graph_history_.SeriesCount() != 0U
+        && graph_history_.Series(0U).count >= 2U;
     if (items.empty() && !draw_graph) {
         ShowWindow(window_, SW_HIDE);
         return;
@@ -327,74 +284,141 @@ void OsdWindow::Render() noexcept {
 
     if (draw_graph) {
         auto* const pixels = static_cast<std::uint32_t*>(pixels_);
-        const auto color = graph_sensor->id == kFpsFrameTimeSensorId
-            ? settings_.fps_color_rgb
-            : SensorSectionColor(ClassifySensor(*graph_sensor), settings_);
-        const auto red = static_cast<std::uint8_t>((color >> 16U) & 0xFFU);
-        const auto green = static_cast<std::uint8_t>((color >> 8U) & 0xFFU);
-        const auto blue = static_cast<std::uint8_t>(color & 0xFFU);
-        const auto alpha = static_cast<std::uint8_t>((230U * settings_.osd_opacity_percent) / 100U);
-        const auto line_pixel = (static_cast<std::uint32_t>(alpha) << 24U)
-            | (static_cast<std::uint32_t>(red) * alpha / 255U << 16U)
-            | (static_cast<std::uint32_t>(green) * alpha / 255U << 8U)
-            | (static_cast<std::uint32_t>(blue) * alpha / 255U);
-        const auto faint_alpha = static_cast<std::uint8_t>((55U * settings_.osd_opacity_percent) / 100U);
-        const auto faint_pixel = (static_cast<std::uint32_t>(faint_alpha) << 24U)
-            | (static_cast<std::uint32_t>(red) * faint_alpha / 255U << 16U)
-            | (static_cast<std::uint32_t>(green) * faint_alpha / 255U << 8U)
-            | (static_cast<std::uint32_t>(blue) * faint_alpha / 255U);
         const auto graph_x = padding;
         const auto graph_y = height - padding - graph_height;
+        const auto label_margin = settings_.osd_graph_labels ? std::min(ScaleForDpi(46), graph_width / 3) : 2;
+        const auto legend_height = settings_.osd_graph_labels ? std::min(ScaleForDpi(18), graph_height / 4) : 2;
+        const RECT plot{
+            graph_x + 2,
+            graph_y + legend_height,
+            graph_x + graph_width - label_margin,
+            graph_y + graph_height - (settings_.osd_graph_labels ? ScaleForDpi(14) : 2)};
+        const auto range = graph_history_.Range();
+        const auto range_span = std::max(0.001, range.maximum - range.minimum);
+        const auto opacity = settings_.osd_opacity_percent;
+
+        auto pixel_for = [&](const std::uint32_t rgb, const unsigned raw_alpha) noexcept {
+            const auto alpha = static_cast<std::uint8_t>(raw_alpha * opacity / 100U);
+            const auto red = static_cast<std::uint8_t>((rgb >> 16U) & 0xFFU);
+            const auto green = static_cast<std::uint8_t>((rgb >> 8U) & 0xFFU);
+            const auto blue = static_cast<std::uint8_t>(rgb & 0xFFU);
+            return (static_cast<std::uint32_t>(alpha) << 24U)
+                | (static_cast<std::uint32_t>(red) * alpha / 255U << 16U)
+                | (static_cast<std::uint32_t>(green) * alpha / 255U << 8U)
+                | (static_cast<std::uint32_t>(blue) * alpha / 255U);
+        };
         auto set_pixel = [&](const int x, const int y, const std::uint32_t value) noexcept {
-            if (x < 0 || y < 0 || x >= width || y >= height) return;
+            if (x < graph_x || y < graph_y || x >= graph_x + graph_width || y >= graph_y + graph_height) return;
             pixels[static_cast<std::size_t>(y) * static_cast<std::size_t>(width) + static_cast<std::size_t>(x)] = value;
         };
+        const auto grid_pixel = pixel_for(settings_.text_color_rgb, 42U);
         for (int x{}; x < graph_width; ++x) {
-            set_pixel(graph_x + x, graph_y, faint_pixel);
-            set_pixel(graph_x + x, graph_y + graph_height - 1, faint_pixel);
+            set_pixel(graph_x + x, graph_y, grid_pixel);
+            set_pixel(graph_x + x, graph_y + graph_height - 1, grid_pixel);
         }
         for (int y{}; y < graph_height; ++y) {
-            set_pixel(graph_x, graph_y + y, faint_pixel);
-            set_pixel(graph_x + graph_width - 1, graph_y + y, faint_pixel);
+            set_pixel(graph_x, graph_y + y, grid_pixel);
+            set_pixel(graph_x + graph_width - 1, graph_y + y, grid_pixel);
+        }
+        if (settings_.osd_graph_grid && plot.right > plot.left && plot.bottom > plot.top) {
+            for (int division = 1; division < 4; ++division) {
+                const auto y = plot.top + (plot.bottom - plot.top) * division / 4;
+                for (int x = plot.left; x <= plot.right; x += 2) set_pixel(x, y, grid_pixel);
+            }
+            for (int division = 1; division < 4; ++division) {
+                const auto x = plot.left + (plot.right - plot.left) * division / 4;
+                for (int y = plot.top; y <= plot.bottom; y += 2) set_pixel(x, y, grid_pixel);
+            }
         }
 
-        double minimum = graph_samples_[graph_first_];
-        double maximum = minimum;
-        for (std::size_t index{}; index < graph_count_; ++index) {
-            const auto value = graph_samples_[(graph_first_ + index) % graph_samples_.size()];
-            minimum = std::min(minimum, value);
-            maximum = std::max(maximum, value);
-        }
-        const auto padding_value = std::max(0.5, (maximum - minimum) * 0.08);
-        minimum -= padding_value;
-        maximum += padding_value;
-        const auto range = std::max(0.001, maximum - minimum);
-        auto point = [&](const std::size_t index) noexcept {
-            const auto value = graph_samples_[(graph_first_ + index) % graph_samples_.size()];
-            const auto x = graph_x + 1 + static_cast<int>((index * static_cast<std::size_t>(std::max(1, graph_width - 3))) / std::max<std::size_t>(1U, graph_count_ - 1U));
-            const auto normalized = std::clamp((value - minimum) / range, 0.0, 1.0);
-            const auto y = graph_y + graph_height - 2 - static_cast<int>(std::llround(normalized * static_cast<double>(std::max(1, graph_height - 3))));
-            return POINT{x, y};
-        };
-        auto previous = point(0U);
-        for (std::size_t index = 1U; index < graph_count_; ++index) {
-            const auto next = point(index);
-            auto x0 = previous.x;
-            auto y0 = previous.y;
-            const auto dx = std::abs(next.x - x0);
-            const auto sx = x0 < next.x ? 1 : -1;
-            const auto dy = -std::abs(next.y - y0);
-            const auto sy = y0 < next.y ? 1 : -1;
-            auto error = dx + dy;
-            while (true) {
-                set_pixel(x0, y0, line_pixel);
-                set_pixel(x0, y0 + 1, line_pixel);
-                if (x0 == next.x && y0 == next.y) break;
-                const auto doubled = error * 2;
-                if (doubled >= dy) { error += dy; x0 += sx; }
-                if (doubled <= dx) { error += dx; y0 += sy; }
+        const auto plot_width = std::max(1L, plot.right - plot.left);
+        const auto plot_height = std::max(1L, plot.bottom - plot.top);
+        const auto view_milliseconds = static_cast<std::uint64_t>(settings_.osd_graph_history_seconds) * 1'000ULL;
+        for (std::size_t series_index{}; series_index < graph_history_.SeriesCount(); ++series_index) {
+            const auto& series = graph_history_.Series(series_index);
+            if (series.count < 2U) continue;
+            const auto line_pixel = pixel_for(settings_.osd_graph_colors_rgb[series_index], 235U);
+            const auto newest_tick = series.Timestamp(series.count - 1U);
+            auto point = [&](const std::size_t index) noexcept {
+                const auto sample_tick = series.Timestamp(index);
+                const auto age = newest_tick >= sample_tick ? newest_tick - sample_tick : 0U;
+                const auto x = plot.right - static_cast<int>(std::min(age, view_milliseconds) * static_cast<std::uint64_t>(plot_width) / std::max<std::uint64_t>(1U, view_milliseconds));
+                const auto normalized = std::clamp((series.Sample(index) - range.minimum) / range_span, 0.0, 1.0);
+                const auto y = plot.bottom - static_cast<int>(std::llround(normalized * static_cast<double>(plot_height)));
+                return POINT{x, y};
+            };
+            std::size_t first_visible{};
+            while (first_visible + 1U < series.count && newest_tick - series.Timestamp(first_visible) > view_milliseconds) ++first_visible;
+            auto previous = point(first_visible);
+            for (std::size_t index = first_visible + 1U; index < series.count; ++index) {
+                const auto next = point(index);
+                auto x0 = previous.x;
+                auto y0 = previous.y;
+                const auto dx = std::abs(next.x - x0);
+                const auto sx = x0 < next.x ? 1 : -1;
+                const auto dy = -std::abs(next.y - y0);
+                const auto sy = y0 < next.y ? 1 : -1;
+                auto error = dx + dy;
+                while (true) {
+                    for (std::uint32_t thickness{}; thickness < settings_.osd_graph_line_thickness_px; ++thickness) {
+                        set_pixel(x0, y0 + static_cast<int>(thickness), line_pixel);
+                    }
+                    if (x0 == next.x && y0 == next.y) break;
+                    const auto doubled = error * 2;
+                    if (doubled >= dy) { error += dy; x0 += sx; }
+                    if (doubled <= dx) { error += dx; y0 += sy; }
+                }
+                previous = next;
             }
-            previous = next;
+        }
+
+        if (settings_.osd_graph_labels) {
+            auto draw_label = [&](const std::wstring& text, const RECT bounds, const std::uint32_t color, const UINT alignment) noexcept {
+                for (int y = std::max(graph_y, static_cast<int>(bounds.top)); y < std::min(graph_y + graph_height, static_cast<int>(bounds.bottom)); ++y) {
+                    for (int x = std::max(graph_x, static_cast<int>(bounds.left)); x < std::min(graph_x + graph_width, static_cast<int>(bounds.right)); ++x) {
+                        pixels[static_cast<std::size_t>(y) * static_cast<std::size_t>(width) + static_cast<std::size_t>(x)] = 0U;
+                    }
+                }
+                const auto previous_font = SelectObject(memory_dc_, sensor_font_);
+                const auto previous_mode = SetBkMode(memory_dc_, TRANSPARENT);
+                SetTextColor(memory_dc_, RGB(255, 255, 255));
+                auto target = bounds;
+                DrawTextW(memory_dc_, text.c_str(), static_cast<int>(text.size()), &target, DT_SINGLELINE | DT_VCENTER | alignment | DT_END_ELLIPSIS);
+                SetBkMode(memory_dc_, previous_mode);
+                SelectObject(memory_dc_, previous_font);
+                for (int y = std::max(graph_y, static_cast<int>(bounds.top)); y < std::min(graph_y + graph_height, static_cast<int>(bounds.bottom)); ++y) {
+                    for (int x = std::max(graph_x, static_cast<int>(bounds.left)); x < std::min(graph_x + graph_width, static_cast<int>(bounds.right)); ++x) {
+                        auto& pixel = pixels[static_cast<std::size_t>(y) * static_cast<std::size_t>(width) + static_cast<std::size_t>(x)];
+                        const auto coverage = static_cast<std::uint8_t>(std::max({pixel & 0xFFU, (pixel >> 8U) & 0xFFU, (pixel >> 16U) & 0xFFU}));
+                        if (coverage == 0U) continue;
+                        const auto alpha = static_cast<std::uint8_t>(static_cast<unsigned>(coverage) * opacity / 100U);
+                        const auto red = static_cast<std::uint8_t>((color >> 16U) & 0xFFU);
+                        const auto green = static_cast<std::uint8_t>((color >> 8U) & 0xFFU);
+                        const auto blue = static_cast<std::uint8_t>(color & 0xFFU);
+                        pixel = (static_cast<std::uint32_t>(alpha) << 24U)
+                            | (static_cast<std::uint32_t>(red) * alpha / 255U << 16U)
+                            | (static_cast<std::uint32_t>(green) * alpha / 255U << 8U)
+                            | (static_cast<std::uint32_t>(blue) * alpha / 255U);
+                    }
+                }
+            };
+            wchar_t scale_text[32]{};
+            static_cast<void>(swprintf_s(scale_text, L"%.1f", range.maximum));
+            draw_label(scale_text, RECT{plot.right + 3, plot.top - 8, graph_x + graph_width - 2, plot.top + 12}, settings_.text_color_rgb, DT_RIGHT);
+            static_cast<void>(swprintf_s(scale_text, L"%.1f", range.minimum));
+            draw_label(scale_text, RECT{plot.right + 3, plot.bottom - 10, graph_x + graph_width - 2, plot.bottom + 10}, settings_.text_color_rgb, DT_RIGHT);
+            wchar_t time_text[32]{};
+            static_cast<void>(swprintf_s(time_text, L"%us", settings_.osd_graph_history_seconds));
+            draw_label(time_text, RECT{plot.left, plot.bottom, plot.left + ScaleForDpi(48), graph_y + graph_height - 1}, settings_.text_color_rgb, DT_LEFT);
+            const auto value_width = std::max(1L, (plot.right - plot.left) / static_cast<LONG>(std::max<std::size_t>(1U, graph_history_.SeriesCount())));
+            for (std::size_t index{}; index < graph_history_.SeriesCount(); ++index) {
+                const auto& series = graph_history_.Series(index);
+                if (!series.available) continue;
+                wchar_t value[64]{};
+                static_cast<void>(swprintf_s(value, L"%.1f %s", series.current, GraphUnitSuffix(series.unit)));
+                const auto left = plot.left + static_cast<LONG>(index) * value_width;
+                draw_label(value, RECT{left, graph_y, left + value_width - 2, graph_y + legend_height}, settings_.osd_graph_colors_rgb[index], DT_LEFT);
+            }
         }
     }
 

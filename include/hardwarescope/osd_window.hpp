@@ -1,11 +1,10 @@
 #pragma once
 
 #include "hardwarescope/app_settings.hpp"
+#include "hardwarescope/graph_model.hpp"
 #include "hardwarescope/sensor_snapshot.hpp"
 
 #include <windows.h>
-
-#include <array>
 
 namespace hardwarescope {
 
@@ -44,8 +43,6 @@ private:
     [[nodiscard]] int ScaleForDpi(int value) const noexcept;
     void Render() noexcept;
     void Position(int width, int height) noexcept;
-    void UpdateGraphHistory(const SensorSnapshot& snapshot) noexcept;
-    [[nodiscard]] const SensorValue* GraphSensor(const SensorSnapshot& snapshot) const noexcept;
     [[nodiscard]] bool GraphBelongsOnThisSurface() const noexcept;
 
     HINSTANCE instance_{};
@@ -63,13 +60,7 @@ private:
     HFONT fps_font_{};
     AppSettings settings_{};
     SensorSnapshot snapshot_{};
-    static constexpr std::size_t kMaximumGraphSamples = 600U;
-    std::array<double, kMaximumGraphSamples> graph_samples_{};
-    std::size_t graph_first_{};
-    std::size_t graph_count_{};
-    std::uint64_t graph_sensor_id_{};
-    std::uint64_t graph_snapshot_sequence_{};
-    ULONGLONG last_graph_sample_tick_{};
+    GraphHistory graph_history_{};
     bool visible_{};
 };
 

@@ -143,7 +143,13 @@ std::vector<OsdDisplayItem> BuildOsdSurfaceItems(
 bool IsSensorSelectedForOsd(const SensorValue& sensor, const AppSettings& settings) noexcept {
     if (sensor.id == kFpsSensorId) return settings.fps_enabled;
     if (sensor.id == kFpsOnePercentLowSensorId) return settings.fps_enabled && settings.fps_one_percent_low_enabled;
-    if (sensor.id == kFpsFrameTimeSensorId) return settings.osd_graph_enabled && settings.osd_graph_sensor_id == sensor.id;
+    if (sensor.id == kFpsFrameTimeSensorId) {
+        return settings.osd_graph_enabled
+            && std::find(
+                settings.osd_graph_sensor_ids.begin(),
+                settings.osd_graph_sensor_ids.begin() + settings.osd_graph_sensor_count,
+                sensor.id) != settings.osd_graph_sensor_ids.begin() + settings.osd_graph_sensor_count;
+    }
     if (sensor.kind == SensorKind::frame_rate) return false;
     if (settings.IsSensorPinned(sensor.id)) return true;
     if (!settings.easy_temperature_enabled) return false;
@@ -164,6 +170,8 @@ void SetSensorSelectedForOsd(const SensorValue& sensor, AppSettings& settings, c
     }
     if (sensor.id == kFpsFrameTimeSensorId) {
         settings.osd_graph_sensor_id = sensor.id;
+        settings.osd_graph_sensor_ids = {sensor.id, 0U, 0U, 0U};
+        settings.osd_graph_sensor_count = 1U;
         settings.osd_graph_enabled = selected;
         return;
     }

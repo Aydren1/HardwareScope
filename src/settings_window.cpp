@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <optional>
@@ -97,13 +98,22 @@ struct DialogState final {
     HWND fps_scale{};
     HWND fps_one_percent_low{};
     HWND graph_enabled{};
-    HWND graph_source{};
+    HWND graph_sources{};
+    HWND graph_scale_mode{};
+    HWND graph_custom_minimum{};
+    HWND graph_custom_maximum{};
     HWND graph_history{};
     HWND graph_refresh{};
     HWND graph_width{};
     HWND graph_height{};
+    HWND graph_line_thickness{};
+    HWND graph_grid{};
+    HWND graph_labels{};
+    HWND floating_graph{};
+    HWND floating_graph_topmost{};
     HWND sensor_list{};
     std::array<HWND, 8U> section_colors{};
+    std::array<HWND, AppSettings::kMaximumGraphSensors> graph_colors{};
 };
 
 int Scale(const DialogState& state, const int value) noexcept {
@@ -328,8 +338,8 @@ HWND PushButton(DialogState& state, const wchar_t* const text, const int x, cons
     return control;
 }
 
-HWND Combo(DialogState& state, const int y, const int page, const std::vector<std::pair<const wchar_t*, std::uint32_t>>& items, const std::uint32_t selected) {
-    const auto control = AddControl(state, WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_BORDER | WS_TABSTOP | WS_VSCROLL, 270, y, 350, 220, 0, page);
+HWND ComboAt(DialogState& state, const int x, const int y, const int width, const int page, const std::vector<std::pair<const wchar_t*, std::uint32_t>>& items, const std::uint32_t selected) {
+    const auto control = AddControl(state, WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_BORDER | WS_TABSTOP | WS_VSCROLL, x, y, width, 220, 0, page);
     if (control != nullptr) static_cast<void>(SetWindowSubclass(control, &ComboWindowProcedure, 1U, reinterpret_cast<DWORD_PTR>(&state)));
     SendMessageW(control, CB_SETITEMHEIGHT, static_cast<WPARAM>(-1), Scale(state, 28));
     SendMessageW(control, CB_SETITEMHEIGHT, 0U, Scale(state, 28));
@@ -342,6 +352,16 @@ HWND Combo(DialogState& state, const int y, const int page, const std::vector<st
     SendMessageW(control, CB_SETCURSEL, selected_index, 0);
     InvalidateRect(control, nullptr, TRUE);
     return control;
+}
+
+HWND Combo(DialogState& state, const int y, const int page, const std::vector<std::pair<const wchar_t*, std::uint32_t>>& items, const std::uint32_t selected) {
+    return ComboAt(state, 270, y, 350, page, items, selected);
+}
+
+HWND NumberEdit(DialogState& state, const double value, const int x, const int y, const int width, const int page) {
+    wchar_t text[48]{};
+    static_cast<void>(swprintf_s(text, L"%.2f", value));
+    return AddControl(state, L"EDIT", text, ES_AUTOHSCROLL | ES_RIGHT | WS_BORDER | WS_TABSTOP, x, y, width, 30, 0, page);
 }
 
 std::uint32_t ComboValue(const HWND combo, const std::uint32_t fallback) noexcept {
@@ -361,55 +381,85 @@ void SelectComboValue(const HWND combo, const std::uint32_t value) noexcept {
     }
 }
 
-std::uint64_t ComboValue64(const HWND combo, const std::uint64_t fallback) noexcept {
-    const auto selected = SendMessageW(combo, CB_GETCURSEL, 0, 0);
-    if (selected == CB_ERR) return fallback;
-    const auto value = SendMessageW(combo, CB_GETITEMDATA, static_cast<WPARAM>(selected), 0);
-    return value == CB_ERR ? fallback : static_cast<std::uint64_t>(value);
-}
-
-void SelectComboValue64(const HWND combo, const std::uint64_t value) noexcept {
-    const auto count = static_cast<int>(SendMessageW(combo, CB_GETCOUNT, 0, 0));
-    for (int index{}; index < count; ++index) {
-        if (static_cast<std::uint64_t>(SendMessageW(combo, CB_GETITEMDATA, index, 0)) == value) {
-            SendMessageW(combo, CB_SETCURSEL, index, 0);
-            return;
-        }
-    }
-    const auto item = SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Saved sensor (currently unavailable)"));
-    if (item != CB_ERR && item != CB_ERRSPACE) {
-        SendMessageW(combo, CB_SETITEMDATA, static_cast<WPARAM>(item), static_cast<LPARAM>(value));
-        SendMessageW(combo, CB_SETCURSEL, static_cast<WPARAM>(item), 0);
-    }
-}
-
-HWND GraphSourceCombo(DialogState& state, const int y, const int page) {
-    const auto control = AddControl(state, WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_BORDER | WS_TABSTOP | WS_VSCROLL, 270, y, 350, 260, 0, page);
+HWND GraphSourceList(DialogState& state, const int y, const int page) {
+    const auto control = AddControl(
+        state,
+        L"LISTBOX",
+        L"",
+        LBS_EXTENDEDSEL | LBS_NOINTEGRALHEIGHT | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS | WS_BORDER | WS_VSCROLL | WS_TABSTOP,
+        42,
+        y,
+        578,
+        170,
+        0,
+        page);
     if (control == nullptr) return nullptr;
-    static_cast<void>(SetWindowSubclass(control, &ComboWindowProcedure, 1U, reinterpret_cast<DWORD_PTR>(&state)));
-    SendMessageW(control, CB_SETITEMHEIGHT, static_cast<WPARAM>(-1), Scale(state, 28));
-    SendMessageW(control, CB_SETITEMHEIGHT, 0U, Scale(state, 28));
-    const auto fps_item = SendMessageW(control, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"FPS frame time"));
-    SendMessageW(control, CB_SETITEMDATA, static_cast<WPARAM>(fps_item), static_cast<LPARAM>(kFpsFrameTimeSensorId));
-    bool selected = state.draft.osd_graph_sensor_id == kFpsFrameTimeSensorId;
-    if (selected) SendMessageW(control, CB_SETCURSEL, static_cast<WPARAM>(fps_item), 0);
-    for (std::uint32_t index{}; state.snapshot != nullptr && index < state.snapshot->count; ++index) {
-        const auto& sensor = state.snapshot->sensors[index];
-        if (sensor.kind == SensorKind::frame_rate || !sensor.available) continue;
-        std::wstring label = sensor.name.data();
-        label += L"  —  ";
-        label += sensor.hardware.data();
-        const auto item = SendMessageW(control, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str()));
-        if (item == CB_ERR || item == CB_ERRSPACE) continue;
-        SendMessageW(control, CB_SETITEMDATA, static_cast<WPARAM>(item), static_cast<LPARAM>(sensor.id));
-        if (sensor.id == state.draft.osd_graph_sensor_id) {
-            SendMessageW(control, CB_SETCURSEL, static_cast<WPARAM>(item), 0);
-            selected = true;
+    SendMessageW(control, LB_SETITEMHEIGHT, 0U, Scale(state, 28));
+    const auto is_selected = [&](const std::uint64_t id) noexcept {
+        return std::find(
+            state.draft.osd_graph_sensor_ids.begin(),
+            state.draft.osd_graph_sensor_ids.begin() + state.draft.osd_graph_sensor_count,
+            id) != state.draft.osd_graph_sensor_ids.begin() + state.draft.osd_graph_sensor_count;
+    };
+    // Keep active series at the top. A long hardware inventory should never hide
+    // the sensors that are already feeding the graph.
+    for (const bool selected_pass : {true, false}) {
+        for (std::uint32_t index{}; state.snapshot != nullptr && index < state.snapshot->count; ++index) {
+            const auto& sensor = state.snapshot->sensors[index];
+            const auto selected = is_selected(sensor.id);
+            if (!sensor.available || selected != selected_pass) continue;
+            std::wstring label = selected ? L"★  " : L"   ";
+            label += sensor.name.data();
+            label += L"  —  ";
+            label += sensor.hardware.data();
+            const auto item = SendMessageW(control, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str()));
+            if (item == LB_ERR || item == LB_ERRSPACE) continue;
+            SendMessageW(control, LB_SETITEMDATA, static_cast<WPARAM>(item), static_cast<LPARAM>(sensor.id));
+            SendMessageW(control, LB_SETSEL, selected ? TRUE : FALSE, item);
         }
     }
-    if (!selected) SelectComboValue64(control, state.draft.osd_graph_sensor_id);
-    InvalidateRect(control, nullptr, TRUE);
     return control;
+}
+
+double NumberValue(const HWND edit, const double fallback) noexcept {
+    std::array<wchar_t, 64U> text{};
+    GetWindowTextW(edit, text.data(), static_cast<int>(text.size()));
+    wchar_t* end{};
+    const auto value = std::wcstod(text.data(), &end);
+    return end != text.data() && std::isfinite(value) ? value : fallback;
+}
+
+const SensorValue* SnapshotSensor(const DialogState& state, const std::uint64_t id) noexcept {
+    for (std::uint32_t index{}; state.snapshot != nullptr && index < state.snapshot->count; ++index) {
+        if (state.snapshot->sensors[index].id == id) return &state.snapshot->sensors[index];
+    }
+    return nullptr;
+}
+
+void UpdateGraphControlStates(DialogState& state) noexcept {
+    const auto custom = ComboValue(state.graph_scale_mode, 0U) == static_cast<std::uint32_t>(GraphScaleMode::custom);
+    EnableWindow(state.graph_custom_minimum, custom ? TRUE : FALSE);
+    EnableWindow(state.graph_custom_maximum, custom ? TRUE : FALSE);
+    EnableWindow(state.floating_graph_topmost, SendMessageW(state.floating_graph, BM_GETCHECK, 0, 0) == BST_CHECKED ? TRUE : FALSE);
+}
+
+void EnforceGraphSelection(DialogState& state) noexcept {
+    const auto caret = static_cast<int>(SendMessageW(state.graph_sources, LB_GETCARETINDEX, 0, 0));
+    if (caret < 0 || SendMessageW(state.graph_sources, LB_GETSEL, caret, 0) <= 0) return;
+    const auto caret_id = static_cast<std::uint64_t>(SendMessageW(state.graph_sources, LB_GETITEMDATA, caret, 0));
+    const auto* caret_sensor = SnapshotSensor(state, caret_id);
+    const auto count = static_cast<int>(SendMessageW(state.graph_sources, LB_GETSELCOUNT, 0, 0));
+    bool invalid = count > static_cast<int>(AppSettings::kMaximumGraphSensors);
+    const auto items = static_cast<int>(SendMessageW(state.graph_sources, LB_GETCOUNT, 0, 0));
+    for (int item{}; !invalid && item < items; ++item) {
+        if (item == caret || SendMessageW(state.graph_sources, LB_GETSEL, item, 0) <= 0) continue;
+        const auto id = static_cast<std::uint64_t>(SendMessageW(state.graph_sources, LB_GETITEMDATA, item, 0));
+        const auto* sensor = SnapshotSensor(state, id);
+        invalid = caret_sensor != nullptr && sensor != nullptr && caret_sensor->unit != sensor->unit;
+    }
+    if (!invalid) return;
+    SendMessageW(state.graph_sources, LB_SETSEL, FALSE, caret);
+    static_cast<void>(MessageBeep(MB_ICONINFORMATION));
 }
 
 bool Checked(const HWND control) noexcept { return SendMessageW(control, BM_GETCHECK, 0, 0) == BST_CHECKED; }
@@ -657,18 +707,44 @@ void BuildControls(DialogState& state) {
         if (IsSensorSelectedForOsd(sensor, state.draft)) SendMessageW(state.sensor_list, LB_SETSEL, TRUE, item);
     }
 
-    state.graph_enabled = Check(state, L"Show one lightweight live graph in the OSD", state.draft.osd_graph_enabled, 82, 3);
-    Label(state, L"Graph source", 126, 3);
-    state.graph_source = GraphSourceCombo(state, 126, 3);
-    Label(state, L"Graph history", 166, 3);
-    state.graph_history = Combo(state, 166, 3, {{L"5 seconds", 5U}, {L"10 seconds", 10U}, {L"15 seconds", 15U}, {L"30 seconds", 30U}, {L"60 seconds", 60U}}, state.draft.osd_graph_history_seconds);
-    Label(state, L"Graph refresh", 206, 3);
-    state.graph_refresh = Combo(state, 206, 3, {{L"100 ms", 100U}, {L"200 ms", 200U}, {L"250 ms", 250U}, {L"500 ms", 500U}}, state.draft.osd_graph_refresh_interval_ms);
-    Label(state, L"Graph width", 246, 3);
-    state.graph_width = Combo(state, 246, 3, {{L"120 px", 120U}, {L"180 px", 180U}, {L"240 px", 240U}, {L"320 px", 320U}, {L"420 px", 420U}, {L"480 px", 480U}}, state.draft.osd_graph_width_px);
-    Label(state, L"Graph height", 286, 3);
-    state.graph_height = Combo(state, 286, 3, {{L"40 px", 40U}, {L"48 px", 48U}, {L"64 px", 64U}, {L"88 px", 88U}, {L"120 px", 120U}, {L"160 px", 160U}}, state.draft.osd_graph_height_px);
-    Label(state, L"FPS uses true PresentMon frame times. Hardware graphs follow sensor polling.", 342, 3, 42, 578);
+    state.graph_enabled = Check(state, L"Show graph in the OSD", state.draft.osd_graph_enabled, 76, 3, 42, 260);
+    state.floating_graph = Check(state, L"Open a floating graph window", state.draft.floating_graph_enabled, 108, 3, 42, 280);
+    state.floating_graph_topmost = Check(state, L"Keep floating graph on top", state.draft.floating_graph_topmost, 108, 3, 340, 280);
+    Label(state, L"Graph sensors — select up to four sensors of the same unit", 146, 3, 42, 578);
+    state.graph_sources = GraphSourceList(state, 176, 3);
+
+    Label(state, L"Scale mode", 360, 3, 42, 112);
+    state.graph_scale_mode = ComboAt(state, 158, 360, 152, 3, {
+        {L"Fixed", 0U}, {L"Adaptive", 1U}, {L"Custom", 2U}}, static_cast<std::uint32_t>(state.draft.osd_graph_scale_mode));
+    Label(state, L"Line thickness", 360, 3, 330, 130);
+    state.graph_line_thickness = ComboAt(state, 468, 360, 152, 3, {
+        {L"1 px", 1U}, {L"2 px", 2U}, {L"3 px", 3U}, {L"4 px", 4U}}, state.draft.osd_graph_line_thickness_px);
+
+    Label(state, L"Custom minimum", 400, 3, 42, 112);
+    state.graph_custom_minimum = NumberEdit(state, state.draft.osd_graph_custom_minimum, 158, 400, 152, 3);
+    Label(state, L"Custom maximum", 400, 3, 330, 130);
+    state.graph_custom_maximum = NumberEdit(state, state.draft.osd_graph_custom_maximum, 468, 400, 152, 3);
+
+    Label(state, L"History", 440, 3, 42, 112);
+    state.graph_history = ComboAt(state, 158, 440, 152, 3, {
+        {L"5 seconds", 5U}, {L"10 seconds", 10U}, {L"15 seconds", 15U}, {L"30 seconds", 30U},
+        {L"60 seconds", 60U}, {L"2 minutes", 120U}, {L"5 minutes", 300U}}, state.draft.osd_graph_history_seconds);
+    Label(state, L"Refresh", 440, 3, 330, 130);
+    state.graph_refresh = ComboAt(state, 468, 440, 152, 3, {
+        {L"50 ms", 50U}, {L"100 ms", 100U}, {L"200 ms", 200U}, {L"250 ms", 250U},
+        {L"500 ms", 500U}, {L"1 second", 1'000U}}, state.draft.osd_graph_refresh_interval_ms);
+
+    Label(state, L"OSD width", 480, 3, 42, 112);
+    state.graph_width = ComboAt(state, 158, 480, 152, 3, {
+        {L"160 px", 160U}, {L"240 px", 240U}, {L"320 px", 320U}, {L"480 px", 480U},
+        {L"640 px", 640U}, {L"960 px", 960U}}, state.draft.osd_graph_width_px);
+    Label(state, L"OSD height", 480, 3, 330, 130);
+    state.graph_height = ComboAt(state, 468, 480, 152, 3, {
+        {L"64 px", 64U}, {L"88 px", 88U}, {L"120 px", 120U}, {L"160 px", 160U},
+        {L"240 px", 240U}, {L"480 px", 480U}}, state.draft.osd_graph_height_px);
+
+    state.graph_grid = Check(state, L"Grid lines", state.draft.osd_graph_grid, 526, 3, 42, 220);
+    state.graph_labels = Check(state, L"Scale, time, and live-value labels", state.draft.osd_graph_labels, 526, 3, 300, 320);
 
     const auto category_choices = ColorChoices(true);
     constexpr std::array<const wchar_t*, 8U> category_labels{
@@ -686,9 +762,17 @@ void BuildControls(DialogState& state) {
     }
     Label(state, L"FPS", 402, 4);
     state.fps_color = Combo(state, 402, 4, category_choices, state.draft.fps_color_rgb);
+    for (std::size_t index{}; index < state.graph_colors.size(); ++index) {
+        wchar_t label[32]{};
+        static_cast<void>(swprintf_s(label, L"Graph line %zu", index + 1U));
+        const auto y = 442 + static_cast<int>(index) * 40;
+        Label(state, label, y, 4);
+        state.graph_colors[index] = Combo(state, y, 4, ColorChoices(false), state.draft.osd_graph_colors_rgb[index]);
+    }
 
     PushButton(state, L"Cancel", 408, 605, 100, 38, kCancel, -1);
     PushButton(state, L"Save settings", 518, 605, 120, 38, kSave, -1);
+    UpdateGraphControlStates(state);
     ShowPage(state, 0);
 }
 
@@ -722,11 +806,36 @@ void ReadControls(DialogState& state) noexcept {
     state.draft.fps_scale_percent = ComboValue(state.fps_scale, state.draft.fps_scale_percent);
     state.draft.fps_one_percent_low_enabled = Checked(state.fps_one_percent_low);
     state.draft.osd_graph_enabled = Checked(state.graph_enabled);
-    state.draft.osd_graph_sensor_id = ComboValue64(state.graph_source, state.draft.osd_graph_sensor_id);
+    state.draft.floating_graph_enabled = Checked(state.floating_graph);
+    state.draft.floating_graph_topmost = Checked(state.floating_graph_topmost);
+    std::array<std::uint64_t, AppSettings::kMaximumGraphSensors> graph_ids{};
+    std::uint32_t graph_count{};
+    std::optional<SensorUnit> graph_unit;
+    const auto graph_items = static_cast<int>(SendMessageW(state.graph_sources, LB_GETCOUNT, 0, 0));
+    for (int item{}; item < graph_items && graph_count < graph_ids.size(); ++item) {
+        if (SendMessageW(state.graph_sources, LB_GETSEL, item, 0) <= 0) continue;
+        const auto id = static_cast<std::uint64_t>(SendMessageW(state.graph_sources, LB_GETITEMDATA, item, 0));
+        const auto* sensor = SnapshotSensor(state, id);
+        if (sensor == nullptr) continue;
+        if (!graph_unit) graph_unit = sensor->unit;
+        if (sensor->unit != *graph_unit) continue;
+        graph_ids[graph_count++] = id;
+    }
+    if (graph_count != 0U) {
+        state.draft.osd_graph_sensor_ids = graph_ids;
+        state.draft.osd_graph_sensor_count = graph_count;
+        state.draft.osd_graph_sensor_id = graph_ids[0];
+    }
     state.draft.osd_graph_history_seconds = ComboValue(state.graph_history, state.draft.osd_graph_history_seconds);
     state.draft.osd_graph_refresh_interval_ms = ComboValue(state.graph_refresh, state.draft.osd_graph_refresh_interval_ms);
     state.draft.osd_graph_width_px = ComboValue(state.graph_width, state.draft.osd_graph_width_px);
     state.draft.osd_graph_height_px = ComboValue(state.graph_height, state.draft.osd_graph_height_px);
+    state.draft.osd_graph_scale_mode = static_cast<GraphScaleMode>(ComboValue(state.graph_scale_mode, 0U));
+    state.draft.osd_graph_custom_minimum = NumberValue(state.graph_custom_minimum, state.draft.osd_graph_custom_minimum);
+    state.draft.osd_graph_custom_maximum = NumberValue(state.graph_custom_maximum, state.draft.osd_graph_custom_maximum);
+    state.draft.osd_graph_line_thickness_px = ComboValue(state.graph_line_thickness, state.draft.osd_graph_line_thickness_px);
+    state.draft.osd_graph_grid = Checked(state.graph_grid);
+    state.draft.osd_graph_labels = Checked(state.graph_labels);
     state.draft.cpu_temperature_color_rgb = ComboValue(state.section_colors[0], state.draft.cpu_temperature_color_rgb);
     state.draft.cpu_usage_color_rgb = ComboValue(state.section_colors[1], state.draft.cpu_usage_color_rgb);
     state.draft.cpu_clock_color_rgb = ComboValue(state.section_colors[2], state.draft.cpu_clock_color_rgb);
@@ -735,6 +844,9 @@ void ReadControls(DialogState& state) noexcept {
     state.draft.storage_color_rgb = ComboValue(state.section_colors[5], state.draft.storage_color_rgb);
     state.draft.memory_color_rgb = ComboValue(state.section_colors[6], state.draft.memory_color_rgb);
     state.draft.system_color_rgb = ComboValue(state.section_colors[7], state.draft.system_color_rgb);
+    for (std::size_t index{}; index < state.graph_colors.size(); ++index) {
+        state.draft.osd_graph_colors_rgb[index] = ComboValue(state.graph_colors[index], state.draft.osd_graph_colors_rgb[index]);
+    }
     const auto count = static_cast<int>(SendMessageW(state.sensor_list, LB_GETCOUNT, 0, 0));
     if (count > 0) {
         state.draft.pinned_sensor_ids = {};
@@ -775,17 +887,40 @@ void ApplyDraftToControls(DialogState& state) noexcept {
     SelectComboValue(state.fps_scale, state.draft.fps_scale_percent);
     SendMessageW(state.fps_one_percent_low, BM_SETCHECK, state.draft.fps_one_percent_low_enabled ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(state.graph_enabled, BM_SETCHECK, state.draft.osd_graph_enabled ? BST_CHECKED : BST_UNCHECKED, 0);
-    SelectComboValue64(state.graph_source, state.draft.osd_graph_sensor_id);
+    SendMessageW(state.floating_graph, BM_SETCHECK, state.draft.floating_graph_enabled ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(state.floating_graph_topmost, BM_SETCHECK, state.draft.floating_graph_topmost ? BST_CHECKED : BST_UNCHECKED, 0);
+    SelectComboValue(state.graph_scale_mode, static_cast<std::uint32_t>(state.draft.osd_graph_scale_mode));
+    wchar_t number[48]{};
+    static_cast<void>(swprintf_s(number, L"%.2f", state.draft.osd_graph_custom_minimum));
+    SetWindowTextW(state.graph_custom_minimum, number);
+    static_cast<void>(swprintf_s(number, L"%.2f", state.draft.osd_graph_custom_maximum));
+    SetWindowTextW(state.graph_custom_maximum, number);
     SelectComboValue(state.graph_history, state.draft.osd_graph_history_seconds);
     SelectComboValue(state.graph_refresh, state.draft.osd_graph_refresh_interval_ms);
     SelectComboValue(state.graph_width, state.draft.osd_graph_width_px);
     SelectComboValue(state.graph_height, state.draft.osd_graph_height_px);
+    SelectComboValue(state.graph_line_thickness, state.draft.osd_graph_line_thickness_px);
+    SendMessageW(state.graph_grid, BM_SETCHECK, state.draft.osd_graph_grid ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(state.graph_labels, BM_SETCHECK, state.draft.osd_graph_labels ? BST_CHECKED : BST_UNCHECKED, 0);
+    const auto graph_items = static_cast<int>(SendMessageW(state.graph_sources, LB_GETCOUNT, 0, 0));
+    for (int item{}; item < graph_items; ++item) {
+        const auto id = static_cast<std::uint64_t>(SendMessageW(state.graph_sources, LB_GETITEMDATA, item, 0));
+        const auto selected = std::find(
+            state.draft.osd_graph_sensor_ids.begin(),
+            state.draft.osd_graph_sensor_ids.begin() + state.draft.osd_graph_sensor_count,
+            id) != state.draft.osd_graph_sensor_ids.begin() + state.draft.osd_graph_sensor_count;
+        SendMessageW(state.graph_sources, LB_SETSEL, selected ? TRUE : FALSE, item);
+    }
     const std::array<std::uint32_t, 8U> colors{
         state.draft.cpu_temperature_color_rgb, state.draft.cpu_usage_color_rgb,
         state.draft.cpu_clock_color_rgb, state.draft.cpu_power_color_rgb,
         state.draft.graphics_color_rgb, state.draft.storage_color_rgb,
         state.draft.memory_color_rgb, state.draft.system_color_rgb};
     for (std::size_t index = 0U; index < colors.size(); ++index) SelectComboValue(state.section_colors[index], colors[index]);
+    for (std::size_t index{}; index < state.graph_colors.size(); ++index) {
+        SelectComboValue(state.graph_colors[index], state.draft.osd_graph_colors_rgb[index]);
+    }
+    UpdateGraphControlStates(state);
     const auto count = static_cast<int>(SendMessageW(state.sensor_list, LB_GETCOUNT, 0, 0));
     for (int item = 0; item < count; ++item) {
         const auto sensor_index = static_cast<std::uint32_t>(SendMessageW(state.sensor_list, LB_GETITEMDATA, item, 0));
@@ -1004,6 +1139,15 @@ LRESULT CALLBACK WindowProcedure(const HWND window, const UINT message, const WP
         return 0;
     }
     case WM_COMMAND:
+        if (HIWORD(wparam) == LBN_SELCHANGE && reinterpret_cast<HWND>(lparam) == state->graph_sources) {
+            EnforceGraphSelection(*state);
+            return 0;
+        }
+        if ((HIWORD(wparam) == CBN_SELCHANGE && reinterpret_cast<HWND>(lparam) == state->graph_scale_mode)
+            || (HIWORD(wparam) == BN_CLICKED && reinterpret_cast<HWND>(lparam) == state->floating_graph)) {
+            UpdateGraphControlStates(*state);
+            return 0;
+        }
         if (HIWORD(wparam) == CBN_SELCHANGE
             && (reinterpret_cast<HWND>(lparam) == state->theme
                 || reinterpret_cast<HWND>(lparam) == state->color

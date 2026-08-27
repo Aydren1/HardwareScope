@@ -46,8 +46,10 @@ roles and release controls, and the [privacy policy](PRIVACY.md).
 - Keyboard shortcuts: `Ctrl+F` searches sensors, `Ctrl+,` opens Settings, and `Esc` clears search
 - Independent, game-only FPS capture and display settings
 - Rolling 1% low FPS calculated from the slowest recent PresentMon frame times
-- One optional live OSD graph for FPS frame time or any available hardware sensor,
-  with configurable history, refresh rate, width, and height
+- HWiNFO-style live graphs in the OSD or a detachable resizable window, with up
+  to four same-unit sensor lines, fixed/adaptive/custom scales, grid and value
+  labels, 5-second to 5-minute history, independent refresh, colors, thickness,
+  pause/reset, zoom, and saved window placement
 - Minimize-to-tray behavior, startup options, and single-instance enforcement
 - Verified GitHub updates with installer size and SHA-256 validation
 - Statically linked MSVC runtime; no separate Visual C++ redistributable needed

@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cmath>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
@@ -60,6 +61,17 @@ bool BooleanValue(const Values& values, const char* key, const bool fallback) no
     if (iterator->second == "1" || iterator->second == "true") return true;
     if (iterator->second == "0" || iterator->second == "false") return false;
     return fallback;
+}
+
+double DoubleValue(const Values& values, const char* key, const double fallback) noexcept {
+    const auto iterator = values.find(key);
+    if (iterator == values.end()) return fallback;
+    double result{};
+    const auto& text = iterator->second;
+    const auto parsed = std::from_chars(text.data(), text.data() + text.size(), result);
+    return parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size() && std::isfinite(result)
+        ? result
+        : fallback;
 }
 
 template <typename Enum>
@@ -130,10 +142,40 @@ void AppSettings::Normalize() noexcept {
     fps_refresh_interval_ms = std::clamp(fps_refresh_interval_ms, 50U, 500U);
     fps_smoothing_interval_ms = std::clamp(fps_smoothing_interval_ms, 250U, 1'250U);
     if (osd_graph_sensor_id == 0U) osd_graph_sensor_id = 3U;
-    osd_graph_history_seconds = std::clamp(osd_graph_history_seconds, 5U, 60U);
-    osd_graph_refresh_interval_ms = std::clamp(osd_graph_refresh_interval_ms, 100U, 500U);
-    osd_graph_width_px = std::clamp(osd_graph_width_px, 120U, 480U);
-    osd_graph_height_px = std::clamp(osd_graph_height_px, 40U, 160U);
+    osd_graph_sensor_count = std::min<std::uint32_t>(
+        osd_graph_sensor_count,
+        static_cast<std::uint32_t>(osd_graph_sensor_ids.size()));
+    if (osd_graph_sensor_count == 0U) {
+        osd_graph_sensor_ids[0] = osd_graph_sensor_id;
+        osd_graph_sensor_count = 1U;
+    }
+    std::uint32_t unique_graph_sensors{};
+    for (std::uint32_t index{}; index < osd_graph_sensor_count; ++index) {
+        const auto id = osd_graph_sensor_ids[index];
+        if (id == 0U || std::find(
+                osd_graph_sensor_ids.begin(),
+                osd_graph_sensor_ids.begin() + unique_graph_sensors,
+                id) != osd_graph_sensor_ids.begin() + unique_graph_sensors) continue;
+        osd_graph_sensor_ids[unique_graph_sensors++] = id;
+    }
+    osd_graph_sensor_count = unique_graph_sensors;
+    if (osd_graph_sensor_count == 0U) {
+        osd_graph_sensor_ids[0] = osd_graph_sensor_id;
+        osd_graph_sensor_count = 1U;
+    }
+    osd_graph_sensor_id = osd_graph_sensor_ids[0];
+    for (auto& color : osd_graph_colors_rgb) color &= 0xFFFFFFU;
+    osd_graph_history_seconds = std::clamp(osd_graph_history_seconds, 5U, 300U);
+    osd_graph_refresh_interval_ms = std::clamp(osd_graph_refresh_interval_ms, 50U, 1'000U);
+    osd_graph_width_px = std::clamp(osd_graph_width_px, 160U, 960U);
+    osd_graph_height_px = std::clamp(osd_graph_height_px, 64U, 480U);
+    osd_graph_line_thickness_px = std::clamp(osd_graph_line_thickness_px, 1U, 4U);
+    if (!std::isfinite(osd_graph_custom_minimum)) osd_graph_custom_minimum = 0.0;
+    if (!std::isfinite(osd_graph_custom_maximum) || osd_graph_custom_maximum <= osd_graph_custom_minimum) {
+        osd_graph_custom_maximum = osd_graph_custom_minimum + 100.0;
+    }
+    floating_graph_width_px = std::clamp(floating_graph_width_px, 360U, 2'560U);
+    floating_graph_height_px = std::clamp(floating_graph_height_px, 220U, 1'440U);
     favorite_sensor_count = std::min<std::uint32_t>(favorite_sensor_count, static_cast<std::uint32_t>(favorite_sensor_ids.size()));
     pinned_sensor_count = std::min<std::uint32_t>(pinned_sensor_count, static_cast<std::uint32_t>(pinned_sensor_ids.size()));
     collapsed_sections &= 0x01FFU;
@@ -240,10 +282,34 @@ bool SettingsStore::Load(AppSettings& destination) const noexcept {
         loaded.fps_one_percent_low_enabled = BooleanValue(values, "fps_one_percent_low_enabled", loaded.fps_one_percent_low_enabled);
         loaded.osd_graph_enabled = BooleanValue(values, "osd_graph_enabled", loaded.osd_graph_enabled);
         loaded.osd_graph_sensor_id = IntegerValue<std::uint64_t>(values, "osd_graph_sensor_id", loaded.osd_graph_sensor_id);
+        loaded.osd_graph_sensor_ids = ParseSensorIds<AppSettings::kMaximumGraphSensors>(
+            values,
+            "osd_graph_sensor_ids",
+            loaded.osd_graph_sensor_count);
+        if (loaded.osd_graph_sensor_count == 0U) {
+            loaded.osd_graph_sensor_ids[0] = loaded.osd_graph_sensor_id;
+            loaded.osd_graph_sensor_count = 1U;
+        }
         loaded.osd_graph_history_seconds = IntegerValue(values, "osd_graph_history_seconds", loaded.osd_graph_history_seconds);
         loaded.osd_graph_refresh_interval_ms = IntegerValue(values, "osd_graph_refresh_interval_ms", loaded.osd_graph_refresh_interval_ms);
         loaded.osd_graph_width_px = IntegerValue(values, "osd_graph_width_px", loaded.osd_graph_width_px);
         loaded.osd_graph_height_px = IntegerValue(values, "osd_graph_height_px", loaded.osd_graph_height_px);
+        loaded.osd_graph_scale_mode = EnumValue(values, "osd_graph_scale_mode", loaded.osd_graph_scale_mode, 2U);
+        loaded.osd_graph_custom_minimum = DoubleValue(values, "osd_graph_custom_minimum", loaded.osd_graph_custom_minimum);
+        loaded.osd_graph_custom_maximum = DoubleValue(values, "osd_graph_custom_maximum", loaded.osd_graph_custom_maximum);
+        loaded.osd_graph_line_thickness_px = IntegerValue(values, "osd_graph_line_thickness_px", loaded.osd_graph_line_thickness_px);
+        loaded.osd_graph_grid = BooleanValue(values, "osd_graph_grid", loaded.osd_graph_grid);
+        loaded.osd_graph_labels = BooleanValue(values, "osd_graph_labels", loaded.osd_graph_labels);
+        loaded.osd_graph_colors_rgb[0] = IntegerValue(values, "osd_graph_color_1_rgb", loaded.osd_graph_colors_rgb[0], 16);
+        loaded.osd_graph_colors_rgb[1] = IntegerValue(values, "osd_graph_color_2_rgb", loaded.osd_graph_colors_rgb[1], 16);
+        loaded.osd_graph_colors_rgb[2] = IntegerValue(values, "osd_graph_color_3_rgb", loaded.osd_graph_colors_rgb[2], 16);
+        loaded.osd_graph_colors_rgb[3] = IntegerValue(values, "osd_graph_color_4_rgb", loaded.osd_graph_colors_rgb[3], 16);
+        loaded.floating_graph_enabled = BooleanValue(values, "floating_graph_enabled", loaded.floating_graph_enabled);
+        loaded.floating_graph_topmost = BooleanValue(values, "floating_graph_topmost", loaded.floating_graph_topmost);
+        loaded.floating_graph_x = IntegerValue(values, "floating_graph_x", loaded.floating_graph_x);
+        loaded.floating_graph_y = IntegerValue(values, "floating_graph_y", loaded.floating_graph_y);
+        loaded.floating_graph_width_px = IntegerValue(values, "floating_graph_width_px", loaded.floating_graph_width_px);
+        loaded.floating_graph_height_px = IntegerValue(values, "floating_graph_height_px", loaded.floating_graph_height_px);
         loaded.automatic_updates = BooleanValue(values, "automatic_updates", loaded.automatic_updates);
         loaded.update_snooze_until_unix_seconds = IntegerValue(values, "update_snooze_until_unix_seconds", loaded.update_snooze_until_unix_seconds);
         loaded.skipped_update_major = IntegerValue(values, "skipped_update_major", loaded.skipped_update_major);
@@ -312,10 +378,32 @@ bool SettingsStore::Save(const AppSettings& settings) const noexcept {
         WriteBoolean(stream, "fps_one_percent_low_enabled", normalized.fps_one_percent_low_enabled);
         WriteBoolean(stream, "osd_graph_enabled", normalized.osd_graph_enabled);
         stream << "osd_graph_sensor_id=" << normalized.osd_graph_sensor_id << '\n';
+        stream << "osd_graph_sensor_ids=";
+        for (std::uint32_t index{}; index < normalized.osd_graph_sensor_count; ++index) {
+            if (index != 0U) stream << ',';
+            stream << normalized.osd_graph_sensor_ids[index];
+        }
+        stream << '\n';
         stream << "osd_graph_history_seconds=" << normalized.osd_graph_history_seconds << '\n';
         stream << "osd_graph_refresh_interval_ms=" << normalized.osd_graph_refresh_interval_ms << '\n';
         stream << "osd_graph_width_px=" << normalized.osd_graph_width_px << '\n';
         stream << "osd_graph_height_px=" << normalized.osd_graph_height_px << '\n';
+        stream << "osd_graph_scale_mode=" << static_cast<unsigned>(normalized.osd_graph_scale_mode) << '\n';
+        stream << "osd_graph_custom_minimum=" << normalized.osd_graph_custom_minimum << '\n';
+        stream << "osd_graph_custom_maximum=" << normalized.osd_graph_custom_maximum << '\n';
+        stream << "osd_graph_line_thickness_px=" << normalized.osd_graph_line_thickness_px << '\n';
+        WriteBoolean(stream, "osd_graph_grid", normalized.osd_graph_grid);
+        WriteBoolean(stream, "osd_graph_labels", normalized.osd_graph_labels);
+        WriteColor(stream, "osd_graph_color_1_rgb", normalized.osd_graph_colors_rgb[0]);
+        WriteColor(stream, "osd_graph_color_2_rgb", normalized.osd_graph_colors_rgb[1]);
+        WriteColor(stream, "osd_graph_color_3_rgb", normalized.osd_graph_colors_rgb[2]);
+        WriteColor(stream, "osd_graph_color_4_rgb", normalized.osd_graph_colors_rgb[3]);
+        WriteBoolean(stream, "floating_graph_enabled", normalized.floating_graph_enabled);
+        WriteBoolean(stream, "floating_graph_topmost", normalized.floating_graph_topmost);
+        stream << "floating_graph_x=" << normalized.floating_graph_x << '\n';
+        stream << "floating_graph_y=" << normalized.floating_graph_y << '\n';
+        stream << "floating_graph_width_px=" << normalized.floating_graph_width_px << '\n';
+        stream << "floating_graph_height_px=" << normalized.floating_graph_height_px << '\n';
         WriteBoolean(stream, "automatic_updates", normalized.automatic_updates);
         stream << "update_snooze_until_unix_seconds=" << normalized.update_snooze_until_unix_seconds << '\n';
         stream << "skipped_update_major=" << normalized.skipped_update_major << '\n';
