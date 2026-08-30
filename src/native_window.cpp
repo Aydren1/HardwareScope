@@ -5,6 +5,7 @@
 #include "hardwarescope/osd_model.hpp"
 #include "hardwarescope/settings_window.hpp"
 #include "hardwarescope/startup_registration.hpp"
+#include "hardwarescope/update_prompt_window.hpp"
 #include "hardwarescope/window_regions.hpp"
 
 #include <d2d1helper.h>
@@ -83,17 +84,6 @@ TableColumns CalculateTableColumns(const float left, const float table_width) no
         left + table_width - 8.0F};
 }
 
-enum class UpdatePromptAction : std::uint8_t {
-    install_now,
-    remind_later,
-    skip_version,
-};
-
-struct UpdatePromptResult final {
-    UpdatePromptAction action{UpdatePromptAction::remind_later};
-    std::chrono::seconds delay{std::chrono::hours{24}};
-};
-
 std::uint64_t CurrentUnixSeconds() noexcept {
     const auto count = std::chrono::duration_cast<std::chrono::seconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
@@ -112,75 +102,6 @@ std::optional<SemanticVersion> SkippedUpdateVersion(const AppSettings& settings)
         settings.skipped_update_major,
         settings.skipped_update_minor,
         settings.skipped_update_patch};
-}
-
-UpdatePromptResult ShowUpdatePrompt(const HWND owner, const UpdateManifest& manifest) noexcept {
-    wchar_t instruction[160]{};
-    static_cast<void>(swprintf_s(
-        instruction,
-        L"HardwareScope %u.%u.%u is ready",
-        manifest.version.major,
-        manifest.version.minor,
-        manifest.version.patch));
-
-    constexpr TASKDIALOG_BUTTON action_buttons[]{
-        {kUpdateNowButton, L"Update now\nClose HardwareScope and install the verified update."},
-        {kUpdateLaterButton, L"Remind me later\nKeep HardwareScope running and use the reminder selected below."},
-    };
-    constexpr TASKDIALOG_BUTTON reminder_buttons[]{
-        {kUpdateIn24HoursRadio, L"In 24 hours"},
-        {kUpdateIn3DaysRadio, L"In 3 days"},
-        {kUpdateIn1WeekRadio, L"In 1 week"},
-        {kSkipUpdateRadio, L"Never for this version"},
-    };
-
-    TASKDIALOGCONFIG configuration{};
-    configuration.cbSize = sizeof(configuration);
-    configuration.hwndParent = owner;
-    configuration.dwFlags = TDF_USE_COMMAND_LINKS | TDF_POSITION_RELATIVE_TO_WINDOW | TDF_ALLOW_DIALOG_CANCELLATION;
-    configuration.dwCommonButtons = TDCBF_CANCEL_BUTTON;
-    configuration.pszWindowTitle = L"HardwareScope update";
-    configuration.pszMainIcon = TD_INFORMATION_ICON;
-    configuration.pszMainInstruction = instruction;
-    configuration.pszContent = L"The installer was downloaded and verified. Choose whether to update now or when HardwareScope should remind you again.";
-    configuration.cButtons = static_cast<UINT>(std::size(action_buttons));
-    configuration.pButtons = action_buttons;
-    configuration.nDefaultButton = kUpdateNowButton;
-    configuration.cRadioButtons = static_cast<UINT>(std::size(reminder_buttons));
-    configuration.pRadioButtons = reminder_buttons;
-    configuration.nDefaultRadioButton = kUpdateIn24HoursRadio;
-
-    int button{};
-    int reminder{kUpdateIn24HoursRadio};
-    using TaskDialogIndirectFunction = HRESULT(WINAPI*)(const TASKDIALOGCONFIG*, int*, int*, BOOL*);
-    auto controls = GetModuleHandleW(L"comctl32.dll");
-    if (controls == nullptr) controls = LoadLibraryW(L"comctl32.dll");
-    const auto task_dialog = controls == nullptr
-        ? nullptr
-        : reinterpret_cast<TaskDialogIndirectFunction>(GetProcAddress(controls, "TaskDialogIndirect"));
-    const auto dialog_result = task_dialog == nullptr
-        ? E_NOTIMPL
-        : task_dialog(&configuration, &button, &reminder, nullptr);
-    if (FAILED(dialog_result)) {
-        wchar_t fallback[320]{};
-        static_cast<void>(swprintf_s(
-            fallback,
-            L"%s\n\nInstall the verified update now? Selecting No will remind you in 24 hours.",
-            instruction));
-        const auto choice = MessageBoxW(
-            owner,
-            fallback,
-            L"HardwareScope update",
-            MB_YESNO | MB_ICONINFORMATION);
-        return choice == IDYES
-            ? UpdatePromptResult{UpdatePromptAction::install_now, {}}
-            : UpdatePromptResult{};
-    }
-    if (button == kUpdateNowButton) return UpdatePromptResult{UpdatePromptAction::install_now, {}};
-    if (reminder == kSkipUpdateRadio) return UpdatePromptResult{UpdatePromptAction::skip_version, {}};
-    if (reminder == kUpdateIn3DaysRadio) return UpdatePromptResult{UpdatePromptAction::remind_later, std::chrono::hours{72}};
-    if (reminder == kUpdateIn1WeekRadio) return UpdatePromptResult{UpdatePromptAction::remind_later, std::chrono::hours{24 * 7}};
-    return UpdatePromptResult{};
 }
 
 const wchar_t* UnitSuffix(const SensorUnit unit) noexcept {
@@ -221,7 +142,8 @@ NativeWindow::NativeWindow(const HINSTANCE instance) noexcept
       settings_store_(SettingsStore::DefaultPath()),
       osd_window_(instance, OsdWindowRole::primary),
       fps_osd_window_(instance, OsdWindowRole::fps),
-      graph_window_(instance) {
+      graph_window_(instance),
+      tray_panel_(instance) {
     const auto settings_loaded = settings_store_.Load(settings_);
     if (!settings_loaded) {
         auto legacy_path = settings_store_.Path().parent_path();
@@ -335,6 +257,7 @@ bool NativeWindow::CreateNativeWindow(const int show_command) {
     if (!osd_window_.Initialize(window_, settings_)) return false;
     if (!fps_osd_window_.Initialize(window_, settings_)) return false;
     if (!graph_window_.Initialize(window_, settings_)) return false;
+    if (!tray_panel_.Initialize(window_, settings_)) return false;
     if (!first_run_) ScheduleAutomaticUpdateCheck();
     if (settings_.start_minimized) {
         ShowWindow(window_, SW_HIDE);
@@ -422,6 +345,7 @@ LRESULT NativeWindow::WindowProcedure(const UINT message, const WPARAM wparam, c
         osd_window_.DisplayChanged();
         fps_osd_window_.DisplayChanged();
         graph_window_.DisplayChanged();
+        tray_panel_.DisplayChanged();
         InvalidateRect(window_, nullptr, FALSE);
         return 0;
     case WM_POWERBROADCAST:
@@ -434,6 +358,7 @@ LRESULT NativeWindow::WindowProcedure(const UINT message, const WPARAM wparam, c
                 while (PeekMessageW(&pending, window_, kSnapshotMessage, kSnapshotMessage, PM_REMOVE)) {}
                 osd_window_.SetVisible(false);
                 fps_osd_window_.SetVisible(false);
+                tray_panel_.Hide();
             }
             return TRUE;
         }
@@ -482,6 +407,21 @@ LRESULT NativeWindow::WindowProcedure(const UINT message, const WPARAM wparam, c
         HandleCharacter(static_cast<wchar_t>(wparam));
         return 0;
     case WM_KEYDOWN:
+#if HARDWARESCOPE_INTERNAL_TEST_HOOKS
+        if (wparam == VK_F8) {
+            RECT work{};
+            static_cast<void>(SystemParametersInfoW(SPI_GETWORKAREA, 0U, &work, 0U));
+            snapshots_.ReadLatest(ui_snapshot_);
+            tray_panel_.Toggle(POINT{work.right - 8, work.bottom - 8}, ui_snapshot_, settings_);
+            return 0;
+        }
+        if (wparam == VK_F9) {
+            UpdateManifest manifest{};
+            manifest.version = SemanticVersion{9U, 9U, 9U};
+            static_cast<void>(ShowUpdatePromptWindow(window_, instance_, manifest, settings_));
+            return 0;
+        }
+#endif
         if ((GetKeyState(VK_CONTROL) & 0x8000) != 0 && wparam == 'F') {
             search_active_ = true;
             SetFocus(window_);
@@ -530,7 +470,10 @@ LRESULT NativeWindow::WindowProcedure(const UINT message, const WPARAM wparam, c
         break;
     case kManualUpdateRequestMessage:
         if (!BeginNativeUpdateCheck(window_, false)) {
-            MessageBoxW(GetLastActivePopup(window_), L"An update check is already running.", L"HardwareScope update", MB_OK | MB_ICONINFORMATION);
+            ShowUpdateNoticeWindow(
+                GetLastActivePopup(window_), instance_, settings_,
+                L"Update check already running",
+                L"HardwareScope is already checking GitHub for a verified stable release.");
         }
         return 0;
     case kUpdateCompletedMessage:
@@ -562,6 +505,15 @@ LRESULT NativeWindow::WindowProcedure(const UINT message, const WPARAM wparam, c
         return AddTrayIcon() ? 1 : 0;
     case kQueryTrayIconAddedMessage:
         return tray_icon_added_ ? 1 : 0;
+    case kToggleTrayPanelTestMessage: {
+        RECT work{};
+        static_cast<void>(SystemParametersInfoW(SPI_GETWORKAREA, 0U, &work, 0U));
+        snapshots_.ReadLatest(ui_snapshot_);
+        tray_panel_.Toggle(POINT{work.right - 8, work.bottom - 8}, ui_snapshot_, settings_);
+        return tray_panel_.Visible() ? 1 : 0;
+    }
+    case kQueryTrayPanelVisibleMessage:
+        return tray_panel_.Visible() ? 1 : 0;
     case kApplyMainDpiTestMessage: {
         const auto target_dpi = std::clamp(static_cast<UINT>(wparam), 96U, 384U);
         RECT target{};
@@ -576,7 +528,7 @@ LRESULT NativeWindow::WindowProcedure(const UINT message, const WPARAM wparam, c
     case kShowUpdatePromptTestMessage: {
         UpdateManifest manifest{};
         manifest.version = SemanticVersion{9U, 9U, 9U};
-        static_cast<void>(ShowUpdatePrompt(window_, manifest));
+        static_cast<void>(ShowUpdatePromptWindow(window_, instance_, manifest, settings_));
         return 1;
     }
     case kQueueAutomaticUpdateNotificationTestMessage: {
@@ -641,7 +593,13 @@ LRESULT NativeWindow::WindowProcedure(const UINT message, const WPARAM wparam, c
     case kTrayMessage: {
         const auto tray_event = static_cast<UINT>(LOWORD(lparam));
         if (tray_event == NIN_BALLOONUSERCLICK) PromptForPendingUpdate();
-        else if (tray_event == WM_LBUTTONUP || tray_event == NIN_SELECT || tray_event == NIN_KEYSELECT) RestoreFromTray();
+        else if (tray_event == WM_LBUTTONDBLCLK) RestoreFromTray();
+        else if (tray_event == WM_LBUTTONUP || tray_event == NIN_SELECT || tray_event == NIN_KEYSELECT) {
+            POINT cursor{};
+            static_cast<void>(GetCursorPos(&cursor));
+            snapshots_.ReadLatest(ui_snapshot_);
+            tray_panel_.Toggle(cursor, ui_snapshot_, settings_);
+        }
         else if (tray_event == WM_RBUTTONUP || tray_event == WM_CONTEXTMENU) ShowTrayMenu();
         return 0;
     }
@@ -690,6 +648,7 @@ void NativeWindow::HandleSnapshotMessage() noexcept {
     osd_window_.Update(ui_snapshot_);
     fps_osd_window_.Update(ui_snapshot_);
     graph_window_.Update(ui_snapshot_);
+    tray_panel_.Update(ui_snapshot_, settings_);
     if (resume_waiting_for_snapshot_) {
         resume_waiting_for_snapshot_ = false;
         osd_window_.SetVisible(settings_.show_osd);
@@ -1302,6 +1261,7 @@ bool NativeWindow::AddTrayIcon() noexcept {
 }
 
 void NativeWindow::RemoveTrayIcon() noexcept {
+    tray_panel_.Hide();
     if (!tray_icon_added_) return;
     NOTIFYICONDATAW icon{};
     icon.cbSize = sizeof(icon);
@@ -1315,16 +1275,19 @@ void NativeWindow::RemoveTrayIcon() noexcept {
 
 void NativeWindow::MinimizeToTray() noexcept {
     static_cast<void>(AddTrayIcon());
+    tray_panel_.Hide();
     ShowWindow(window_, SW_HIDE);
 }
 
 void NativeWindow::RestoreFromTray() noexcept {
+    tray_panel_.Hide();
     if (IsIconic(window_)) ShowWindow(window_, SW_RESTORE);
     else ShowWindow(window_, SW_SHOW);
     static_cast<void>(SetForegroundWindow(window_));
 }
 
 void NativeWindow::ShowTrayMenu() noexcept {
+    tray_panel_.Hide();
     const auto menu = CreatePopupMenu();
     if (menu == nullptr) return;
     static_cast<void>(AppendMenuW(menu, MF_STRING, kCommandOpen, L"Open HardwareScope"));
@@ -1381,6 +1344,7 @@ void NativeWindow::ShowSettings() noexcept {
     osd_window_.ApplySettings(settings_);
     fps_osd_window_.ApplySettings(settings_);
     graph_window_.ApplySettings(settings_);
+    tray_panel_.ApplySettings(settings_);
     sensor_worker_.Stop();
     sensor_worker_.ConfigureFps(
         settings_.fps_enabled,
@@ -1480,7 +1444,7 @@ void NativeWindow::PromptForPendingUpdate() noexcept {
 
 void NativeWindow::PromptForUpdate(const UpdateCompletion& completion) noexcept {
     const auto popup = GetLastActivePopup(window_);
-    const auto choice = ShowUpdatePrompt(popup, completion.manifest);
+    const auto choice = ShowUpdatePromptWindow(popup, instance_, completion.manifest, settings_);
     if (choice.action == UpdatePromptAction::remind_later) {
         settings_.update_snooze_until_unix_seconds = CurrentUnixSeconds()
             + static_cast<std::uint64_t>(choice.delay.count());
@@ -1509,14 +1473,22 @@ void NativeWindow::PromptForUpdate(const UpdateCompletion& completion) noexcept 
     std::array<wchar_t, 32'768U> module_path{};
     const auto length = GetModuleFileNameW(nullptr, module_path.data(), static_cast<DWORD>(module_path.size()));
     if (length == 0U || length >= module_path.size()) {
-        MessageBoxW(popup, L"The verified update could not be handed to Setup. Nothing was changed.", L"HardwareScope update", MB_OK | MB_ICONWARNING);
+        ShowUpdateNoticeWindow(
+            popup, instance_, settings_,
+            L"Update could not start",
+            L"The verified update could not be handed to Setup. Nothing was changed.",
+            true);
         return;
     }
     const std::filesystem::path application{module_path.data()};
     auto updater = application.parent_path() / L"HardwareScopeUpdater.exe";
     if (!std::filesystem::exists(updater)) updater = application.parent_path() / L"HardwareScopeNativeUpdater.exe";
     if (!LaunchUpdateHandoff(updater, completion.installer, completion.manifest, GetCurrentProcessId(), application)) {
-        MessageBoxW(popup, L"The verified update could not be handed to Setup. Nothing was changed.", L"HardwareScope update", MB_OK | MB_ICONWARNING);
+        ShowUpdateNoticeWindow(
+            popup, instance_, settings_,
+            L"Update could not start",
+            L"The verified update could not be handed to Setup. Nothing was changed.",
+            true);
         return;
     }
     if (popup != nullptr && popup != window_) static_cast<void>(PostMessageW(popup, WM_CLOSE, 0U, 0));
@@ -1535,7 +1507,11 @@ void NativeWindow::HandleUpdateCompletion(const UpdateCompletion& completion) no
         if (!completion.automatic) {
             wchar_t message[256]{};
             static_cast<void>(swprintf_s(message, L"HardwareScope could not verify an update. Nothing was installed.\n\nWindows error: %u", completion.system_error));
-            MessageBoxW(popup, message, L"HardwareScope update", MB_OK | MB_ICONWARNING);
+            ShowUpdateNoticeWindow(
+                popup, instance_, settings_,
+                L"Update check failed",
+                message,
+                true);
         }
         return;
     }
@@ -1547,7 +1523,12 @@ void NativeWindow::HandleUpdateCompletion(const UpdateCompletion& completion) no
                 ScheduleAutomaticUpdateCheck();
             }
         }
-        if (!completion.automatic) MessageBoxW(popup, L"HardwareScope is already up to date.", L"HardwareScope update", MB_OK | MB_ICONINFORMATION);
+        if (!completion.automatic) {
+            ShowUpdateNoticeWindow(
+                popup, instance_, settings_,
+                L"HardwareScope is up to date",
+                L"You already have the newest verified stable release.");
+        }
         return;
     }
 

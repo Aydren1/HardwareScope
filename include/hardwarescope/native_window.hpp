@@ -7,6 +7,7 @@
 #include "hardwarescope/sensor_explanations.hpp"
 #include "hardwarescope/sensor_view_model.hpp"
 #include "hardwarescope/sensor_worker.hpp"
+#include "hardwarescope/tray_panel_window.hpp"
 #include "hardwarescope/ui_palette.hpp"
 #include "hardwarescope/update_coordinator.hpp"
 
@@ -123,6 +124,7 @@ private:
     OsdWindow osd_window_;
     OsdWindow fps_osd_window_;
     GraphWindow graph_window_;
+    TrayPanelWindow tray_panel_;
 
     Microsoft::WRL::ComPtr<ID2D1Factory> d2d_factory_{};
     Microsoft::WRL::ComPtr<IDWriteFactory> dwrite_factory_{};

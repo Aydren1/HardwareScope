@@ -37,5 +37,9 @@ constexpr unsigned int kConfigureOsdGraphTestMessage = 0x8000U + 74U;
 constexpr unsigned int kGraphWindowClosedMessage = 0x8000U + 75U;
 constexpr unsigned int kGraphWindowPlacementChangedMessage = 0x8000U + 76U;
 constexpr unsigned int kConfigureFloatingGraphTestMessage = 0x8000U + 77U;
+constexpr unsigned int kToggleTrayPanelTestMessage = 0x8000U + 78U;
+constexpr unsigned int kQueryTrayPanelVisibleMessage = 0x8000U + 79U;
+constexpr unsigned int kQueryUpdatePromptChoicesMessage = 0x8000U + 80U;
+constexpr unsigned int kQueryUpdatePromptSelectionMessage = 0x8000U + 81U;
 
 } // namespace hardwarescope

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.28)
 
-project(HardwareScopeNative VERSION 2.0.10 LANGUAGES CXX RC)
+project(HardwareScopeNative VERSION 2.0.11 LANGUAGES CXX RC)
 
 configure_file(installer/HardwareScope.iss.in HardwareScope.iss @ONLY)
 configure_file(resources/HardwareScopeVersion.rc.in HardwareScopeVersion.rc @ONLY)
@@ -63,6 +63,8 @@ set(HARDWARESCOPE_APP_SOURCES
     src/native_window.cpp
     src/osd_window.cpp
     src/settings_window.cpp
+    src/tray_panel_window.cpp
+    src/update_prompt_window.cpp
     resources/HardwareScope.rc
     ${HARDWARESCOPE_VERSION_RESOURCE}
 )

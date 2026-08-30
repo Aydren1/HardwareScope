@@ -2,6 +2,8 @@
 #include <commctrl.h>
 
 #include "hardwarescope/app_commands.hpp"
+#include "hardwarescope/tray_panel_window.hpp"
+#include "hardwarescope/update_prompt_window.hpp"
 
 #include <algorithm>
 #include <array>
@@ -22,39 +24,6 @@ struct MonitorCollection final {
     std::array<RECT, 8U> work_areas{};
     std::size_t count{};
 };
-
-struct UpdatePromptControls final {
-    bool update_now{};
-    bool update_later{};
-    bool in_24_hours{};
-    bool in_3_days{};
-    bool in_1_week{};
-    bool skip_version{};
-};
-
-BOOL CALLBACK CollectUpdatePromptControls(const HWND child, const LPARAM context) noexcept {
-    auto& controls = *reinterpret_cast<UpdatePromptControls*>(context);
-    wchar_t text[96]{};
-    static_cast<void>(GetWindowTextW(child, text, static_cast<int>(std::size(text))));
-    if (wcscmp(text, L"Update now") == 0) controls.update_now = true;
-    else if (wcscmp(text, L"Remind me later") == 0) controls.update_later = true;
-    else if (wcscmp(text, L"In 24 hours") == 0) controls.in_24_hours = true;
-    else if (wcscmp(text, L"In 3 days") == 0) controls.in_3_days = true;
-    else if (wcscmp(text, L"In 1 week") == 0) controls.in_1_week = true;
-    else if (wcscmp(text, L"Never for this version") == 0) controls.skip_version = true;
-    return TRUE;
-}
-
-BOOL CALLBACK LogUpdatePromptControls(const HWND child, const LPARAM context) noexcept {
-    auto& stream = *reinterpret_cast<std::ostream*>(context);
-    wchar_t class_name[96]{};
-    wchar_t text[256]{};
-    static_cast<void>(GetClassNameW(child, class_name, static_cast<int>(std::size(class_name))));
-    static_cast<void>(GetWindowTextW(child, text, static_cast<int>(std::size(text))));
-    stream << "  child id=" << GetDlgCtrlID(child) << ", class=" << std::filesystem::path{class_name}.string()
-           << ", text=" << std::filesystem::path{text}.string() << '\n';
-    return TRUE;
-}
 
 BOOL CALLBACK CollectMonitor(const HMONITOR monitor, HDC, LPRECT, const LPARAM context) noexcept {
     auto& collection = *reinterpret_cast<MonitorCollection*>(context);
@@ -190,6 +159,8 @@ int wmain(const int argument_count, wchar_t** arguments) {
             hardwarescope::kSelectSettingsTabTestMessage,
             hardwarescope::kConfigureOsdGraphTestMessage,
             hardwarescope::kConfigureFloatingGraphTestMessage,
+            hardwarescope::kToggleTrayPanelTestMessage,
+            hardwarescope::kQueryTrayPanelVisibleMessage,
         };
         for (const auto message : hook_messages) {
             if (SendMessageW(window, message, 144U, 0U) != 0) {
@@ -354,39 +325,26 @@ int wmain(const int argument_count, wchar_t** arguments) {
         HWND update_prompt{};
         for (int attempt = 0; attempt < 100 && update_prompt == nullptr; ++attempt) {
             Sleep(25U);
-            update_prompt = FindWindowW(L"#32770", L"HardwareScope update");
-        }
-        UpdatePromptControls update_controls{};
-        if (update_prompt != nullptr) {
-            static_cast<void>(EnumChildWindows(update_prompt, &CollectUpdatePromptControls, reinterpret_cast<LPARAM>(&update_controls)));
+            update_prompt = FindWindowW(hardwarescope::kUpdatePromptWindowClass, L"HardwareScope update");
         }
         if (update_prompt == nullptr
-            || !update_controls.update_now
-            || !update_controls.update_later
-            || !update_controls.in_24_hours
-            || !update_controls.in_3_days
-            || !update_controls.in_1_week
-            || !update_controls.skip_version) {
-            std::cerr << "FAIL: update prompt is missing an install or reminder choice: now="
-                      << update_controls.update_now
-                      << ", later=" << update_controls.update_later
-                      << ", 24h=" << update_controls.in_24_hours
-                      << ", 3d=" << update_controls.in_3_days
-                      << ", 1w=" << update_controls.in_1_week
-                      << ", never=" << update_controls.skip_version << '\n';
-            if (update_prompt != nullptr) {
-                static_cast<void>(EnumChildWindows(update_prompt, &LogUpdatePromptControls, reinterpret_cast<LPARAM>(&std::cerr)));
-            }
+            || SendMessageW(update_prompt, hardwarescope::kQueryUpdatePromptChoicesMessage, 0U, 0U) != 0x3F) {
+            std::cerr << "FAIL: themed update prompt is missing its install or reminder choices\n";
             return 1;
         }
-        static_cast<void>(SendMessageW(update_prompt, TDM_CLICK_RADIO_BUTTON, hardwarescope::kUpdateIn1WeekRadio, 0U));
-        static_cast<void>(SendMessageW(update_prompt, TDM_CLICK_BUTTON, hardwarescope::kUpdateLaterButton, 0U));
+        static_cast<void>(SendMessageW(update_prompt, WM_COMMAND, hardwarescope::kUpdateIn1WeekRadio, 0U));
+        if (SendMessageW(update_prompt, hardwarescope::kQueryUpdatePromptSelectionMessage, 0U, 0U)
+            != hardwarescope::kUpdateIn1WeekRadio) {
+            std::cerr << "FAIL: themed update prompt did not select the one-week reminder\n";
+            return 1;
+        }
+        static_cast<void>(SendMessageW(update_prompt, WM_COMMAND, hardwarescope::kUpdateLaterButton, 0U));
         for (int attempt = 0; attempt < 100 && IsWindow(update_prompt); ++attempt) Sleep(25U);
         if (IsWindow(update_prompt)) {
             std::cerr << "FAIL: update reminder choice did not close the prompt\n";
             return 1;
         }
-        std::cout << "OK: verified updates ask before installing and offer 24 hours, 3 days, 1 week, or never for that version\n";
+        std::cout << "OK: themed in-app updater offers update now, 24 hours, 3 days, 1 week, or never for that version\n";
     } else {
         std::cout << "SKIP: update prompt inspection is unavailable with this Windows dialog host\n";
     }
@@ -475,6 +433,24 @@ int wmain(const int argument_count, wchar_t** arguments) {
         return 1;
     }
     std::cout << "OK: tray icon restoration path re-adds the notification icon\n";
+    const auto foreground_before_panel = GetForegroundWindow();
+    if (SendMessageW(window, hardwarescope::kToggleTrayPanelTestMessage, 0U, 0U) != 1) {
+        std::cerr << "FAIL: tray quick panel did not open\n";
+        return 1;
+    }
+    const auto tray_panel = FindWindowW(hardwarescope::TrayPanelWindow::kWindowClass, L"HardwareScope quick view");
+    if (tray_panel == nullptr || !IsWindowVisible(tray_panel)
+        || SendMessageW(window, hardwarescope::kQueryTrayPanelVisibleMessage, 0U, 0U) != 1
+        || GetForegroundWindow() != foreground_before_panel) {
+        std::cerr << "FAIL: tray quick panel is missing, hidden, or stole focus\n";
+        return 1;
+    }
+    if (SendMessageW(window, hardwarescope::kToggleTrayPanelTestMessage, 0U, 0U) != 0
+        || IsWindowVisible(tray_panel)) {
+        std::cerr << "FAIL: tray quick panel did not close on the second toggle\n";
+        return 1;
+    }
+    std::cout << "OK: tray quick panel toggles without activating or opening the full app\n";
 
     if (SendMessageW(window, WM_POWERBROADCAST, PBT_APMSUSPEND, 0U) != TRUE
         || SendMessageW(window, hardwarescope::kQuerySensorWorkerRunningMessage, 0U, 0U) != 0
