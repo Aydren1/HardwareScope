@@ -1117,10 +1117,55 @@ void DrawOsdPreview(DialogState& state, const DRAWITEMSTRUCT& item) noexcept {
         int surface_width = state.draft.osd_layout == OsdLayout::horizontal
             ? std::max(120, static_cast<int>(bounds.right - bounds.left) - Scale(state, 16))
             : Scale(state, 190);
-        int surface_height = state.draft.osd_layout == OsdLayout::horizontal
-            ? line_height + Scale(state, 12) + graph_height
-            : static_cast<int>(items.size()) * line_height + std::max(0, static_cast<int>(items.size()) - 1) * gap + Scale(state, 12) + graph_height;
         surface_width = std::min(surface_width, static_cast<int>(bounds.right - bounds.left) - Scale(state, 8));
+
+        struct PreviewPlacement final {
+            const OsdDisplayItem* item{};
+            std::wstring text;
+            int offset_x{};
+            int row{};
+        };
+        std::vector<PreviewPlacement> placements;
+        placements.reserve(items.size());
+        const auto content_width = std::max(Scale(state, 40), surface_width - Scale(state, 12));
+        int row{};
+        int cursor_x{};
+        OsdHardwareGroup previous_group = OsdHardwareGroup::other;
+        bool first = true;
+        for (const auto& display_item : items) {
+            auto text = display_item.text;
+            const auto group_changed = !first && display_item.group != previous_group;
+            if (state.draft.osd_layout == OsdLayout::horizontal
+                && state.draft.osd_group_separators && group_changed) {
+                text = L"|  " + text;
+            }
+
+            SIZE size{};
+            GetTextExtentPoint32W(item.hDC, text.data(), static_cast<int>(text.size()), &size);
+            if (state.draft.osd_layout == OsdLayout::horizontal
+                && cursor_x != 0 && cursor_x + size.cx > content_width) {
+                ++row;
+                cursor_x = 0;
+                // A wrapped row is already visually separated, so do not begin it with a divider.
+                text = display_item.text;
+                GetTextExtentPoint32W(item.hDC, text.data(), static_cast<int>(text.size()), &size);
+            }
+
+            placements.push_back(PreviewPlacement{&display_item, std::move(text), cursor_x, row});
+            if (state.draft.osd_layout == OsdLayout::horizontal) {
+                cursor_x += std::min(static_cast<int>(size.cx), content_width) + gap;
+            } else {
+                ++row;
+            }
+            previous_group = display_item.group;
+            first = false;
+        }
+
+        const auto row_count = state.draft.osd_layout == OsdLayout::horizontal
+            ? (placements.empty() ? 0 : placements.back().row + 1)
+            : static_cast<int>(placements.size());
+        int surface_height = row_count * line_height
+            + std::max(0, row_count - 1) * gap + Scale(state, 12) + graph_height;
         surface_height = std::min(surface_height, static_cast<int>(bounds.bottom - bounds.top) - Scale(state, 8));
         RECT surface{bounds.left + Scale(state, 5), bounds.top + Scale(state, 5), 0, 0};
         if (position == OsdPosition::top_right || position == OsdPosition::bottom_right) surface.left = bounds.right - surface_width - Scale(state, 5);
@@ -1129,31 +1174,17 @@ void DrawOsdPreview(DialogState& state, const DRAWITEMSTRUCT& item) noexcept {
         surface.bottom = surface.top + surface_height;
         if (state.draft.osd_background) FillRect(item.hDC, &surface, state.surface_brush);
 
-        int x = surface.left + Scale(state, 6);
-        int y = surface.top + Scale(state, 4);
-        OsdHardwareGroup previous_group = OsdHardwareGroup::other;
-        bool first = true;
-        for (const auto& display_item : items) {
-            auto text = display_item.text;
-            if (!first && state.draft.osd_layout == OsdLayout::horizontal && state.draft.osd_group_separators
-                && display_item.group != previous_group) text = L"|  " + text;
+        for (const auto& placement : placements) {
+            const auto& display_item = *placement.item;
             SetTextColor(item.hDC, PreviewColor(
                 display_item.fps ? state.draft.fps_color_rgb : display_item.color_rgb,
                 state.draft.osd_opacity_percent,
                 0x04070AU));
+            const auto x = surface.left + Scale(state, 6) + placement.offset_x;
+            const auto y = surface.top + Scale(state, 4) + placement.row * (line_height + gap);
             RECT text_bounds{x, y, surface.right - Scale(state, 5), y + line_height};
-            DrawTextW(item.hDC, text.data(), static_cast<int>(text.size()), &text_bounds, DT_SINGLELINE | DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
-            if (state.draft.osd_layout == OsdLayout::horizontal) {
-                SIZE size{};
-                GetTextExtentPoint32W(item.hDC, text.data(), static_cast<int>(text.size()), &size);
-                x += size.cx + gap;
-                if (x >= surface.right - Scale(state, 30)) break;
-            } else {
-                y += line_height + gap;
-                if (y >= surface.bottom - graph_height - line_height) break;
-            }
-            previous_group = display_item.group;
-            first = false;
+            DrawTextW(item.hDC, placement.text.data(), static_cast<int>(placement.text.size()), &text_bounds,
+                DT_SINGLELINE | DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
         }
         if (graph_height != 0) {
             const auto graph_top = surface.bottom - graph_height + Scale(state, 4);
