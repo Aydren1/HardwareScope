@@ -176,8 +176,18 @@ void AppSettings::Normalize() noexcept {
     }
     floating_graph_width_px = std::clamp(floating_graph_width_px, 360U, 2'560U);
     floating_graph_height_px = std::clamp(floating_graph_height_px, 220U, 1'440U);
+    reset_min_max_interval_minutes = std::min(reset_min_max_interval_minutes, 10'080U);
     favorite_sensor_count = std::min<std::uint32_t>(favorite_sensor_count, static_cast<std::uint32_t>(favorite_sensor_ids.size()));
     pinned_sensor_count = std::min<std::uint32_t>(pinned_sensor_count, static_cast<std::uint32_t>(pinned_sensor_ids.size()));
+    osd_sensor_order_count = std::min<std::uint32_t>(osd_sensor_order_count, static_cast<std::uint32_t>(osd_sensor_order_ids.size()));
+    std::uint32_t unique_osd_sensors{};
+    for (std::uint32_t index{}; index < osd_sensor_order_count; ++index) {
+        const auto id = osd_sensor_order_ids[index];
+        if (id == 0U || std::find(osd_sensor_order_ids.begin(), osd_sensor_order_ids.begin() + unique_osd_sensors, id)
+                != osd_sensor_order_ids.begin() + unique_osd_sensors) continue;
+        osd_sensor_order_ids[unique_osd_sensors++] = id;
+    }
+    osd_sensor_order_count = unique_osd_sensors;
     collapsed_sections &= 0x01FFU;
 }
 
@@ -261,6 +271,9 @@ bool SettingsStore::Load(AppSettings& destination) const noexcept {
         loaded.onboarding_completed = BooleanValue(values, "onboarding_completed", true);
         loaded.start_with_windows = BooleanValue(values, "start_with_windows", loaded.start_with_windows);
         loaded.start_minimized = BooleanValue(values, "start_minimized", loaded.start_minimized);
+        loaded.reset_min_max_on_startup = BooleanValue(values, "reset_min_max_on_startup", loaded.reset_min_max_on_startup);
+        loaded.reset_min_max_on_game_launch = BooleanValue(values, "reset_min_max_on_game_launch", loaded.reset_min_max_on_game_launch);
+        loaded.reset_min_max_interval_minutes = IntegerValue(values, "reset_min_max_interval_minutes", loaded.reset_min_max_interval_minutes);
         loaded.show_osd = BooleanValue(values, "show_osd", loaded.show_osd);
         loaded.osd_position = EnumValue(values, "osd_position", loaded.osd_position, 3U);
         loaded.osd_layout = EnumValue(values, "osd_layout", loaded.osd_layout, 1U);
@@ -320,6 +333,7 @@ bool SettingsStore::Load(AppSettings& destination) const noexcept {
         loaded.favorites_initialized = BooleanValue(values, "favorites_initialized", false);
         loaded.favorite_sensor_ids = ParseSensorIds<AppSettings::kMaximumFavoriteSensors>(values, "favorite_sensor_ids", loaded.favorite_sensor_count);
         loaded.pinned_sensor_ids = ParseSensorIds<AppSettings::kMaximumPinnedSensors>(values, "pinned_sensor_ids", loaded.pinned_sensor_count);
+        loaded.osd_sensor_order_ids = ParseSensorIds<AppSettings::kMaximumOsdOrderSensors>(values, "osd_sensor_order_ids", loaded.osd_sensor_order_count);
         loaded.Normalize();
         destination = loaded;
         return true;
@@ -357,6 +371,9 @@ bool SettingsStore::Save(const AppSettings& settings) const noexcept {
         WriteBoolean(stream, "onboarding_completed", normalized.onboarding_completed);
         WriteBoolean(stream, "start_with_windows", normalized.start_with_windows);
         WriteBoolean(stream, "start_minimized", normalized.start_minimized);
+        WriteBoolean(stream, "reset_min_max_on_startup", normalized.reset_min_max_on_startup);
+        WriteBoolean(stream, "reset_min_max_on_game_launch", normalized.reset_min_max_on_game_launch);
+        stream << "reset_min_max_interval_minutes=" << normalized.reset_min_max_interval_minutes << '\n';
         WriteBoolean(stream, "show_osd", normalized.show_osd);
         stream << "osd_position=" << static_cast<unsigned>(normalized.osd_position) << '\n';
         stream << "osd_layout=" << static_cast<unsigned>(normalized.osd_layout) << '\n';
@@ -422,6 +439,12 @@ bool SettingsStore::Save(const AppSettings& settings) const noexcept {
         for (std::uint32_t index = 0; index < normalized.pinned_sensor_count; ++index) {
             if (index != 0U) stream << ',';
             stream << normalized.pinned_sensor_ids[index];
+        }
+        stream << '\n';
+        stream << "osd_sensor_order_ids=";
+        for (std::uint32_t index = 0; index < normalized.osd_sensor_order_count; ++index) {
+            if (index != 0U) stream << ',';
+            stream << normalized.osd_sensor_order_ids[index];
         }
         stream << '\n';
         stream.flush();

@@ -38,10 +38,11 @@ enum EasyTemperature : std::uint32_t {
 };
 
 struct AppSettings final {
-    static constexpr std::uint32_t kSchemaVersion = 6U;
+    static constexpr std::uint32_t kSchemaVersion = 7U;
     static constexpr std::size_t kMaximumPinnedSensors = 64U;
     static constexpr std::size_t kMaximumFavoriteSensors = 64U;
     static constexpr std::size_t kMaximumGraphSensors = 4U;
+    static constexpr std::size_t kMaximumOsdOrderSensors = 64U;
     static constexpr std::uint32_t kMatchAccentColor = 0x01000000U;
 
     std::uint32_t refresh_interval_ms{750U};
@@ -62,6 +63,9 @@ struct AppSettings final {
 
     bool start_with_windows{};
     bool start_minimized{};
+    bool reset_min_max_on_startup{true};
+    bool reset_min_max_on_game_launch{};
+    std::uint32_t reset_min_max_interval_minutes{};
 
     bool show_osd{true};
     OsdPosition osd_position{OsdPosition::top_left};
@@ -123,6 +127,8 @@ struct AppSettings final {
 
     std::array<std::uint64_t, kMaximumPinnedSensors> pinned_sensor_ids{};
     std::uint32_t pinned_sensor_count{};
+    std::array<std::uint64_t, kMaximumOsdOrderSensors> osd_sensor_order_ids{};
+    std::uint32_t osd_sensor_order_count{};
 
     void Normalize() noexcept;
     [[nodiscard]] bool PinSensor(std::uint64_t sensor_id) noexcept;

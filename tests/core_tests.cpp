@@ -122,6 +122,18 @@ void TestSensorWorker() {
     hardwarescope::SensorWorker worker(store, &WorkerCallback, &sequence, hardwarescope::SensorWorkerMode::synthetic);
     worker.Start(std::chrono::milliseconds{100});
     std::this_thread::sleep_for(std::chrono::milliseconds{360});
+    const auto before_reset = sequence.load(std::memory_order_acquire);
+    worker.RequestMinMaxReset();
+    for (int attempt{}; attempt < 500 && sequence.load(std::memory_order_acquire) <= before_reset; ++attempt) {
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }
+    const auto reset_snapshot = store.ReadLatest();
+    const auto reset_applied = std::all_of(
+        reset_snapshot.sensors.begin(),
+        reset_snapshot.sensors.begin() + reset_snapshot.count,
+        [](const hardwarescope::SensorValue& sensor) {
+            return !sensor.available || (sensor.minimum == sensor.current && sensor.maximum == sensor.current);
+        });
     worker.Stop();
     Expect(!worker.Running(), "sensor worker stops cleanly");
     Expect(sequence.load(std::memory_order_acquire) >= 3, "sensor worker publishes on its independent schedule");
@@ -129,6 +141,7 @@ void TestSensorWorker() {
     Expect(snapshot.sequence == sequence.load(std::memory_order_acquire), "worker callback and snapshot agree");
     Expect(snapshot.count == 7, "synthetic provider supplies expected foundation sensors");
     Expect(snapshot.collection_microseconds < 50'000, "synthetic collection stays outside a UI-frame budget");
+    Expect(reset_applied, "manual Min/Max reset starts a fresh extrema session on the next sample");
 }
 
 void TestSensorPublishCadence() {
@@ -201,6 +214,9 @@ void TestSettingsStore() {
     settings.onboarding_completed = true;
     settings.start_with_windows = true;
     settings.start_minimized = true;
+    settings.reset_min_max_on_startup = false;
+    settings.reset_min_max_on_game_launch = true;
+    settings.reset_min_max_interval_minutes = 99'999U;
     settings.osd_position = hardwarescope::OsdPosition::bottom_right;
     settings.osd_layout = hardwarescope::OsdLayout::horizontal;
     settings.osd_opacity_percent = 7U;
@@ -256,6 +272,8 @@ void TestSettingsStore() {
     Expect(settings.UnpinSensor(10U) && !settings.IsSensorPinned(10U), "pinned sensor can be removed without disturbing other selections");
     Expect(!settings.UnpinSensor(99U), "removing an unknown pinned sensor is a no-op");
     Expect(settings.PinSensor(10U), "removed sensor can be pinned again");
+    settings.osd_sensor_order_ids = {22U, 10U, 22U};
+    settings.osd_sensor_order_count = 3U;
     Expect(store.Save(settings), "settings save is atomic and succeeds");
 
     hardwarescope::AppSettings loaded{};
@@ -270,6 +288,9 @@ void TestSettingsStore() {
     Expect(loaded.interface_text_scale_percent == 130U && loaded.high_contrast && loaded.onboarding_completed,
         "accessibility and onboarding settings clamp and round-trip");
     Expect(loaded.start_with_windows && loaded.start_minimized, "startup settings round-trip");
+    Expect(!loaded.reset_min_max_on_startup && loaded.reset_min_max_on_game_launch
+            && loaded.reset_min_max_interval_minutes == 10'080U,
+        "Min/Max reset triggers clamp and round-trip");
     Expect(loaded.show_osd, "unmodified OSD setting retains its saved default");
     Expect(loaded.osd_position == hardwarescope::OsdPosition::bottom_right, "OSD position round-trips");
     Expect(loaded.osd_layout == hardwarescope::OsdLayout::horizontal, "horizontal OSD layout round-trips");
@@ -309,6 +330,8 @@ void TestSettingsStore() {
     Expect(!loaded.favorites_only && loaded.favorites_initialized, "Favorites view state round-trips");
     Expect(loaded.favorite_sensor_count == 2U && loaded.IsFavorite(31U) && loaded.IsFavorite(44U), "favorite sensor IDs round-trip");
     Expect(loaded.pinned_sensor_count == 2U && loaded.IsSensorPinned(10U) && loaded.IsSensorPinned(22U), "pinned sensor IDs round-trip");
+    Expect(loaded.osd_sensor_order_count == 2U && loaded.osd_sensor_order_ids[0] == 22U && loaded.osd_sensor_order_ids[1] == 10U,
+        "OSD sensor ordering round-trips and removes duplicates");
     loaded.refresh_interval_ms = 333U;
     Expect(store.Save(loaded), "a changed millisecond polling interval saves successfully");
     hardwarescope::AppSettings changed_polling{};
@@ -408,6 +431,13 @@ void TestOsdModel() {
     Expect(settings.PinSensor(12U), "disabled EZ temperature can be pinned explicitly");
     const auto pinned_items = hardwarescope::BuildOsdDisplayItems(snapshot, settings);
     Expect(pinned_items.size() == 5U && pinned_items.back().sensor_id == 12U, "pinned sensor is appended without duplicating EZ items");
+    settings.osd_sensor_order_ids = {12U, 10U, 11U};
+    settings.osd_sensor_order_count = 3U;
+    const auto ordered_items = hardwarescope::BuildOsdDisplayItems(snapshot, settings);
+    Expect(ordered_items[0].sensor_id == hardwarescope::kFpsSensorId
+            && ordered_items[1].sensor_id == hardwarescope::kFpsOnePercentLowSensorId
+            && ordered_items[2].sensor_id == 12U && ordered_items[3].sensor_id == 10U,
+        "drag ordering rearranges telemetry while FPS stays first");
     settings.fps_enabled = false;
     const auto no_fps_items = hardwarescope::BuildOsdDisplayItems(snapshot, settings);
     Expect(no_fps_items.size() == 3U && std::none_of(no_fps_items.begin(), no_fps_items.end(), [](const auto& item) { return item.fps; }), "disabled FPS and 1% low are absent from OSD");

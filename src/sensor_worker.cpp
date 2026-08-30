@@ -120,6 +120,16 @@ void SensorWorker::ConfigureFps(
     fps_smoothing_interval_ms_ = std::clamp(smoothing_interval_ms, 250U, 1'250U);
 }
 
+void SensorWorker::ConfigureMinMaxReset(const bool on_game_launch, const std::uint32_t interval_minutes) noexcept {
+    if (Running()) return;
+    reset_min_max_on_game_launch_ = on_game_launch;
+    reset_min_max_interval_minutes_ = std::min(interval_minutes, 10'080U);
+}
+
+void SensorWorker::RequestMinMaxReset() noexcept {
+    reset_history_requested_.store(true, std::memory_order_release);
+}
+
 void SensorWorker::Run(const std::stop_token stop_token, const std::chrono::milliseconds interval) noexcept {
     if (workspace_ == nullptr) {
         running_.store(false, std::memory_order_release);
@@ -143,6 +153,8 @@ void SensorWorker::Run(const std::stop_token stop_token, const std::chrono::mill
     }
     ResetSnapshot(workspace_->last_hardware_snapshot);
     auto next_hardware_refresh = std::chrono::steady_clock::time_point{};
+    auto last_history_reset = std::chrono::steady_clock::now();
+    bool previous_game_target_active{};
 
     while (!stop_token.stop_requested()) {
         auto& snapshot = workspace_->publish_snapshot;
@@ -176,6 +188,16 @@ void SensorWorker::Run(const std::stop_token stop_token, const std::chrono::mill
         } else {
             CollectSynthetic(++sequence, snapshot);
         }
+        const auto history_now = std::chrono::steady_clock::now();
+        const auto periodic_reset = reset_min_max_interval_minutes_ != 0U
+            && history_now - last_history_reset >= std::chrono::minutes{reset_min_max_interval_minutes_};
+        const auto game_launch_reset = reset_min_max_on_game_launch_ && game_target_active && !previous_game_target_active;
+        if (reset_history_requested_.exchange(false, std::memory_order_acq_rel) || periodic_reset || game_launch_reset) {
+            history_ = {};
+            history_count_ = 0U;
+            last_history_reset = history_now;
+        }
+        previous_game_target_active = game_target_active;
         ApplyHistory(snapshot);
         store_.Publish(snapshot);
         if (callback_ != nullptr) callback_(callback_context_, sequence);

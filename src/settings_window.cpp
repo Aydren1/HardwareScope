@@ -31,6 +31,8 @@ constexpr int kLogicalDialogWidth = 710;
 constexpr int kLogicalDialogHeight = 690;
 constexpr int kLogicalContentWidth = 650;
 constexpr int kLogicalContentHeight = 650;
+constexpr int kOsdPreviewControl = 21;
+constexpr int kOsdOrderListControl = 22;
 
 COLORREF WinColor(const std::uint32_t rgb) noexcept {
     return RGB((rgb >> 16U) & 0xFFU, (rgb >> 8U) & 0xFFU, rgb & 0xFFU);
@@ -76,6 +78,9 @@ struct DialogState final {
     HWND high_contrast{};
     HWND start_windows{};
     HWND start_minimized{};
+    HWND reset_on_startup{};
+    HWND reset_on_game_launch{};
+    HWND reset_interval{};
     HWND updates{};
     HWND check_updates{};
     HWND export_settings{};
@@ -112,9 +117,53 @@ struct DialogState final {
     HWND floating_graph{};
     HWND floating_graph_topmost{};
     HWND sensor_list{};
+    HWND osd_preview{};
+    HWND osd_order_list{};
+    int osd_drag_index{-1};
     std::array<HWND, 8U> section_colors{};
     std::array<HWND, AppSettings::kMaximumGraphSensors> graph_colors{};
 };
+
+void SyncOsdOrderFromList(DialogState& state) noexcept;
+
+LRESULT CALLBACK OsdOrderListWindowProcedure(
+    const HWND control,
+    const UINT message,
+    const WPARAM wparam,
+    const LPARAM lparam,
+    const UINT_PTR subclass_id,
+    const DWORD_PTR reference) noexcept {
+    auto& state = *reinterpret_cast<DialogState*>(reference);
+    if (message == WM_LBUTTONDOWN) {
+        const auto hit = static_cast<DWORD>(SendMessageW(control, LB_ITEMFROMPOINT, 0, lparam));
+        if (HIWORD(hit) == 0U) {
+            state.osd_drag_index = LOWORD(hit);
+            SetCapture(control);
+        }
+    } else if (message == WM_MOUSEMOVE && GetCapture() == control && state.osd_drag_index >= 0) {
+        const auto hit = static_cast<DWORD>(SendMessageW(control, LB_ITEMFROMPOINT, 0, lparam));
+        const auto target = HIWORD(hit) == 0U ? static_cast<int>(LOWORD(hit)) : state.osd_drag_index;
+        if (target != state.osd_drag_index) {
+            std::array<wchar_t, 256U> text{};
+            SendMessageW(control, LB_GETTEXT, state.osd_drag_index, reinterpret_cast<LPARAM>(text.data()));
+            const auto id = SendMessageW(control, LB_GETITEMDATA, state.osd_drag_index, 0);
+            SendMessageW(control, LB_DELETESTRING, state.osd_drag_index, 0);
+            const auto inserted = static_cast<int>(SendMessageW(control, LB_INSERTSTRING, target, reinterpret_cast<LPARAM>(text.data())));
+            SendMessageW(control, LB_SETITEMDATA, inserted, id);
+            SendMessageW(control, LB_SETCURSEL, inserted, 0);
+            state.osd_drag_index = inserted;
+            SyncOsdOrderFromList(state);
+            if (state.osd_preview != nullptr) InvalidateRect(state.osd_preview, nullptr, TRUE);
+        }
+        return 0;
+    } else if (message == WM_LBUTTONUP && GetCapture() == control) {
+        ReleaseCapture();
+        state.osd_drag_index = -1;
+    } else if (message == WM_NCDESTROY) {
+        RemoveWindowSubclass(control, &OsdOrderListWindowProcedure, subclass_id);
+    }
+    return DefSubclassProc(control, message, wparam, lparam);
+}
 
 int Scale(const DialogState& state, const int value) noexcept {
     return MulDiv(value, static_cast<int>(state.dpi), 96);
@@ -625,6 +674,30 @@ void HandleScroll(DialogState& state, const int bar, const WPARAM wparam, const 
         SW_SCROLLCHILDREN | SW_INVALIDATE));
 }
 
+void SyncOsdOrderFromList(DialogState& state) noexcept {
+    if (state.osd_order_list == nullptr) return;
+    state.draft.osd_sensor_order_ids = {};
+    state.draft.osd_sensor_order_count = 0U;
+    const auto count = static_cast<int>(SendMessageW(state.osd_order_list, LB_GETCOUNT, 0, 0));
+    for (int item{}; item < count && state.draft.osd_sensor_order_count < state.draft.osd_sensor_order_ids.size(); ++item) {
+        const auto id = static_cast<std::uint64_t>(SendMessageW(state.osd_order_list, LB_GETITEMDATA, item, 0));
+        if (id != 0U) state.draft.osd_sensor_order_ids[state.draft.osd_sensor_order_count++] = id;
+    }
+}
+
+void RebuildOsdOrderList(DialogState& state) noexcept {
+    if (state.osd_order_list == nullptr || state.snapshot == nullptr) return;
+    SendMessageW(state.osd_order_list, WM_SETREDRAW, FALSE, 0);
+    SendMessageW(state.osd_order_list, LB_RESETCONTENT, 0, 0);
+    for (const auto& item : BuildOsdDisplayItems(*state.snapshot, state.draft)) {
+        if (item.fps) continue;
+        const auto index = SendMessageW(state.osd_order_list, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(item.text.c_str()));
+        if (index != LB_ERR && index != LB_ERRSPACE) SendMessageW(state.osd_order_list, LB_SETITEMDATA, index, static_cast<LPARAM>(item.sensor_id));
+    }
+    SendMessageW(state.osd_order_list, WM_SETREDRAW, TRUE, 0);
+    InvalidateRect(state.osd_order_list, nullptr, TRUE);
+}
+
 void BuildControls(DialogState& state) {
     state.tabs = AddControl(state, WC_TABCONTROLW, L"", TCS_OWNERDRAWFIXED | TCS_FIXEDWIDTH | WS_TABSTOP, 20, 18, 610, 38, kTabs, -1);
     if (state.tabs != nullptr) static_cast<void>(SetWindowSubclass(state.tabs, &TabWindowProcedure, 1U, reinterpret_cast<DWORD_PTR>(&state)));
@@ -663,26 +736,42 @@ void BuildControls(DialogState& state) {
     Label(state, L"Interface text size", 414, 0);
     state.text_scale = Combo(state, 414, 0, {{L"Standard — 100%", 100U}, {L"Large — 115%", 115U}, {L"Extra large — 130%", 130U}}, state.draft.interface_text_scale_percent);
     state.high_contrast = Check(state, L"Use stronger contrast for text, borders, and selections", state.draft.high_contrast, 454, 0);
-    Label(state, L"Keyboard: Ctrl+F search   •   Ctrl+, settings   •   Esc clear search", 494, 0, 42, 590);
-    state.export_settings = PushButton(state, L"Export settings", 42, 548, 180, 36, kSettingsExportCommand, 0);
-    state.import_settings = PushButton(state, L"Import settings", 234, 548, 180, 36, kSettingsImportCommand, 0);
+    Label(state, L"Minimum / Maximum", 494, 0, 42, 180);
+    PushButton(state, L"Reset Min/Max now", 234, 494, 180, 34, kSettingsResetMinMaxCommand, 0);
+    state.reset_on_startup = Check(state, L"Reset at startup", state.draft.reset_min_max_on_startup, 530, 0, 42, 270);
+    state.reset_on_game_launch = Check(state, L"Reset when a game launches", state.draft.reset_min_max_on_game_launch, 530, 0, 330, 290);
+    Label(state, L"Automatic reset interval", 566, 0, 42, 180);
+    state.reset_interval = ComboAt(state, 234, 566, 180, 0, {
+        {L"Never", 0U}, {L"15 minutes", 15U}, {L"30 minutes", 30U}, {L"1 hour", 60U},
+        {L"4 hours", 240U}, {L"12 hours", 720U}, {L"24 hours", 1'440U}, {L"1 week", 10'080U}},
+        state.draft.reset_min_max_interval_minutes);
+    state.export_settings = PushButton(state, L"Export settings", 42, 605, 180, 38, kSettingsExportCommand, 0);
+    state.import_settings = PushButton(state, L"Import settings", 234, 605, 162, 38, kSettingsImportCommand, 0);
 
-    state.show_osd = Check(state, L"Show the on-screen display", state.draft.show_osd, 82, 1);
-    Label(state, L"Telemetry corner", 126, 1);
-    state.position = Combo(state, 126, 1, {{L"Top left", 0U}, {L"Top right", 1U}, {L"Bottom left", 2U}, {L"Bottom right", 3U}}, static_cast<std::uint32_t>(state.draft.osd_position));
-    state.fps_separate_position = Check(state, L"Position the FPS counter separately", state.draft.fps_separate_position, 166, 1);
-    Label(state, L"FPS corner", 202, 1);
-    state.fps_position = Combo(state, 202, 1, {{L"Top left", 0U}, {L"Top right", 1U}, {L"Bottom left", 2U}, {L"Bottom right", 3U}}, static_cast<std::uint32_t>(state.draft.fps_osd_position));
-    Label(state, L"Telemetry layout", 242, 1);
-    state.layout = Combo(state, 242, 1, {{L"Vertical", 0U}, {L"Horizontal", 1U}}, static_cast<std::uint32_t>(state.draft.osd_layout));
-    Label(state, L"Opacity", 282, 1);
-    state.opacity = Combo(state, 282, 1, {{L"25%", 25U}, {L"50%", 50U}, {L"75%", 75U}, {L"90%", 90U}, {L"100%", 100U}}, state.draft.osd_opacity_percent);
-    Label(state, L"Telemetry scale", 322, 1);
-    state.scale = Combo(state, 322, 1, {{L"50%", 50U}, {L"75%", 75U}, {L"100%", 100U}, {L"125%", 125U}, {L"150%", 150U}, {L"200%", 200U}, {L"250%", 250U}}, state.draft.osd_scale_percent);
-    Label(state, L"Item spacing", 362, 1);
-    state.spacing = Combo(state, 362, 1, {{L"Tight — 2 px", 2U}, {L"Compact — 5 px", 5U}, {L"Normal — 8 px", 8U}, {L"Roomy — 12 px", 12U}, {L"Wide — 20 px", 20U}}, state.draft.osd_spacing_px);
-    state.separators = Check(state, L"Separate CPU, GPU, memory, and FPS groups with |", state.draft.osd_group_separators, 418, 1);
-    state.background = Check(state, L"Draw a translucent background behind the OSD", state.draft.osd_background, 454, 1);
+    state.show_osd = Check(state, L"Show the on-screen display", state.draft.show_osd, 82, 1, 32, 270);
+    Label(state, L"Telemetry corner", 122, 1, 32, 125);
+    state.position = ComboAt(state, 155, 122, 140, 1, {{L"Top left", 0U}, {L"Top right", 1U}, {L"Bottom left", 2U}, {L"Bottom right", 3U}}, static_cast<std::uint32_t>(state.draft.osd_position));
+    state.fps_separate_position = Check(state, L"Separate FPS position", state.draft.fps_separate_position, 162, 1, 32, 270);
+    Label(state, L"FPS corner", 202, 1, 32, 125);
+    state.fps_position = ComboAt(state, 155, 202, 140, 1, {{L"Top left", 0U}, {L"Top right", 1U}, {L"Bottom left", 2U}, {L"Bottom right", 3U}}, static_cast<std::uint32_t>(state.draft.fps_osd_position));
+    Label(state, L"Layout", 242, 1, 32, 125);
+    state.layout = ComboAt(state, 155, 242, 140, 1, {{L"Vertical", 0U}, {L"Horizontal", 1U}}, static_cast<std::uint32_t>(state.draft.osd_layout));
+    Label(state, L"Opacity", 282, 1, 32, 125);
+    state.opacity = ComboAt(state, 155, 282, 140, 1, {{L"25%", 25U}, {L"50%", 50U}, {L"75%", 75U}, {L"90%", 90U}, {L"100%", 100U}}, state.draft.osd_opacity_percent);
+    Label(state, L"Scale", 322, 1, 32, 125);
+    state.scale = ComboAt(state, 155, 322, 140, 1, {{L"50%", 50U}, {L"75%", 75U}, {L"100%", 100U}, {L"125%", 125U}, {L"150%", 150U}, {L"200%", 200U}, {L"250%", 250U}}, state.draft.osd_scale_percent);
+    Label(state, L"Spacing", 362, 1, 32, 125);
+    state.spacing = ComboAt(state, 155, 362, 140, 1, {{L"Tight — 2 px", 2U}, {L"Compact — 5 px", 5U}, {L"Normal — 8 px", 8U}, {L"Roomy — 12 px", 12U}, {L"Wide — 20 px", 20U}}, state.draft.osd_spacing_px);
+    state.separators = Check(state, L"Group separators", state.draft.osd_group_separators, 410, 1, 32, 270);
+    state.background = Check(state, L"Translucent background", state.draft.osd_background, 446, 1, 32, 270);
+    Label(state, L"LIVE PREVIEW", 82, 1, 320, 290);
+    state.osd_preview = AddControl(state, L"STATIC", L"", SS_OWNERDRAW | WS_BORDER, 320, 112, 310, 250, kOsdPreviewControl, 1);
+    Label(state, L"SENSOR ORDER — drag to rearrange", 382, 1, 320, 310);
+    Label(state, L"FPS stays first", 410, 1, 320, 310);
+    state.osd_order_list = AddControl(state, L"LISTBOX", L"", LBS_NOINTEGRALHEIGHT | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS | WS_BORDER | WS_VSCROLL | WS_TABSTOP, 320, 442, 310, 144, kOsdOrderListControl, 1);
+    SendMessageW(state.osd_order_list, LB_SETITEMHEIGHT, 0U, Scale(state, 28));
+    static_cast<void>(SetWindowSubclass(state.osd_order_list, &OsdOrderListWindowProcedure, 1U, reinterpret_cast<DWORD_PTR>(&state)));
+    RebuildOsdOrderList(state);
 
     state.fps_enabled = Check(state, L"Enable game FPS monitoring", state.draft.fps_enabled, 82, 2);
     state.fps_game_only = Check(state, L"Show FPS only while a game is running", state.draft.fps_game_only, 114, 2);
@@ -785,6 +874,9 @@ void ReadControls(DialogState& state) noexcept {
     state.draft.onboarding_completed = true;
     state.draft.start_with_windows = Checked(state.start_windows);
     state.draft.start_minimized = Checked(state.start_minimized);
+    state.draft.reset_min_max_on_startup = Checked(state.reset_on_startup);
+    state.draft.reset_min_max_on_game_launch = Checked(state.reset_on_game_launch);
+    state.draft.reset_min_max_interval_minutes = ComboValue(state.reset_interval, state.draft.reset_min_max_interval_minutes);
     state.draft.automatic_updates = Checked(state.updates);
     state.draft.show_osd = Checked(state.show_osd);
     state.draft.osd_position = static_cast<OsdPosition>(ComboValue(state.position, 0U));
@@ -857,6 +949,7 @@ void ReadControls(DialogState& state) noexcept {
             if (state.snapshot != nullptr && sensor_index < state.snapshot->count) state.draft.pinned_sensor_ids[state.draft.pinned_sensor_count++] = state.snapshot->sensors[sensor_index].id;
         }
     }
+    SyncOsdOrderFromList(state);
     state.draft.Normalize();
 }
 
@@ -868,6 +961,9 @@ void ApplyDraftToControls(DialogState& state) noexcept {
     SendMessageW(state.high_contrast, BM_SETCHECK, state.draft.high_contrast ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(state.start_windows, BM_SETCHECK, state.draft.start_with_windows ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(state.start_minimized, BM_SETCHECK, state.draft.start_minimized ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(state.reset_on_startup, BM_SETCHECK, state.draft.reset_min_max_on_startup ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(state.reset_on_game_launch, BM_SETCHECK, state.draft.reset_min_max_on_game_launch ? BST_CHECKED : BST_UNCHECKED, 0);
+    SelectComboValue(state.reset_interval, state.draft.reset_min_max_interval_minutes);
     SendMessageW(state.updates, BM_SETCHECK, state.draft.automatic_updates ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(state.show_osd, BM_SETCHECK, state.draft.show_osd ? BST_CHECKED : BST_UNCHECKED, 0);
     SelectComboValue(state.position, static_cast<std::uint32_t>(state.draft.osd_position));
@@ -929,6 +1025,8 @@ void ApplyDraftToControls(DialogState& state) noexcept {
             && IsSensorSelectedForOsd(state.snapshot->sensors[sensor_index], state.draft);
         SendMessageW(state.sensor_list, LB_SETSEL, selected ? TRUE : FALSE, item);
     }
+    RebuildOsdOrderList(state);
+    if (state.osd_preview != nullptr) InvalidateRect(state.osd_preview, nullptr, TRUE);
 }
 
 std::optional<std::filesystem::path> SelectSettingsPath(const HWND owner, const bool save) noexcept {
@@ -970,6 +1068,125 @@ void DrawControlText(
     SelectObject(dc, previous_font);
 }
 
+COLORREF PreviewColor(const std::uint32_t rgb, const std::uint32_t opacity, const std::uint32_t background) noexcept {
+    const auto blend = [&](const unsigned shift) {
+        const auto foreground_component = (rgb >> shift) & 0xFFU;
+        const auto background_component = (background >> shift) & 0xFFU;
+        return (foreground_component * opacity + background_component * (100U - opacity)) / 100U;
+    };
+    return RGB(blend(16U), blend(8U), blend(0U));
+}
+
+void DrawOsdPreview(DialogState& state, const DRAWITEMSTRUCT& item) noexcept {
+    auto bounds = item.rcItem;
+    FillRect(item.hDC, &bounds, state.background_brush);
+    InflateRect(&bounds, -Scale(state, 7), -Scale(state, 7));
+    const auto monitor_brush = CreateSolidBrush(RGB(4, 7, 10));
+    FillRect(item.hDC, &bounds, monitor_brush);
+    DeleteObject(monitor_brush);
+
+    std::vector<OsdDisplayItem> hardware_items;
+    std::vector<OsdDisplayItem> fps_items;
+    if (state.snapshot != nullptr) {
+        for (auto& display_item : BuildOsdDisplayItems(*state.snapshot, state.draft)) {
+            (display_item.fps ? fps_items : hardware_items).push_back(std::move(display_item));
+        }
+    }
+    if (state.draft.fps_enabled && fps_items.empty()) {
+        fps_items.push_back(OsdDisplayItem{kFpsSensorId, L"FPS 144", OsdHardwareGroup::fps, state.draft.fps_color_rgb, true});
+        if (state.draft.fps_one_percent_low_enabled) {
+            fps_items.push_back(OsdDisplayItem{kFpsOnePercentLowSensorId, L"1% Low 112", OsdHardwareGroup::fps, state.draft.fps_color_rgb, true});
+        }
+    }
+    if (!state.draft.fps_separate_position) {
+        hardware_items.insert(hardware_items.begin(), fps_items.begin(), fps_items.end());
+        fps_items.clear();
+    }
+
+    const auto draw_surface = [&](const std::vector<OsdDisplayItem>& items, const OsdPosition position, const bool fps_surface) {
+        if (items.empty()) return;
+        const auto scale_percent = fps_surface ? state.draft.fps_scale_percent : state.draft.osd_scale_percent;
+        const auto font_height = std::clamp(MulDiv(11, static_cast<int>(scale_percent), 100), 8, 22);
+        const auto font = CreateFontW(-Scale(state, font_height), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+            OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+        const auto previous_font = SelectObject(item.hDC, font);
+        const auto previous_mode = SetBkMode(item.hDC, TRANSPARENT);
+        const auto gap = std::clamp(Scale(state, static_cast<int>(state.draft.osd_spacing_px / 2U)), 1, Scale(state, 12));
+        const auto line_height = Scale(state, font_height + 4);
+        const auto graph_height = !fps_surface && state.draft.osd_graph_enabled ? Scale(state, 46) : 0;
+        int surface_width = state.draft.osd_layout == OsdLayout::horizontal
+            ? std::max(120, static_cast<int>(bounds.right - bounds.left) - Scale(state, 16))
+            : Scale(state, 190);
+        int surface_height = state.draft.osd_layout == OsdLayout::horizontal
+            ? line_height + Scale(state, 12) + graph_height
+            : static_cast<int>(items.size()) * line_height + std::max(0, static_cast<int>(items.size()) - 1) * gap + Scale(state, 12) + graph_height;
+        surface_width = std::min(surface_width, static_cast<int>(bounds.right - bounds.left) - Scale(state, 8));
+        surface_height = std::min(surface_height, static_cast<int>(bounds.bottom - bounds.top) - Scale(state, 8));
+        RECT surface{bounds.left + Scale(state, 5), bounds.top + Scale(state, 5), 0, 0};
+        if (position == OsdPosition::top_right || position == OsdPosition::bottom_right) surface.left = bounds.right - surface_width - Scale(state, 5);
+        if (position == OsdPosition::bottom_left || position == OsdPosition::bottom_right) surface.top = bounds.bottom - surface_height - Scale(state, 5);
+        surface.right = surface.left + surface_width;
+        surface.bottom = surface.top + surface_height;
+        if (state.draft.osd_background) FillRect(item.hDC, &surface, state.surface_brush);
+
+        int x = surface.left + Scale(state, 6);
+        int y = surface.top + Scale(state, 4);
+        OsdHardwareGroup previous_group = OsdHardwareGroup::other;
+        bool first = true;
+        for (const auto& display_item : items) {
+            auto text = display_item.text;
+            if (!first && state.draft.osd_layout == OsdLayout::horizontal && state.draft.osd_group_separators
+                && display_item.group != previous_group) text = L"|  " + text;
+            SetTextColor(item.hDC, PreviewColor(
+                display_item.fps ? state.draft.fps_color_rgb : display_item.color_rgb,
+                state.draft.osd_opacity_percent,
+                0x04070AU));
+            RECT text_bounds{x, y, surface.right - Scale(state, 5), y + line_height};
+            DrawTextW(item.hDC, text.data(), static_cast<int>(text.size()), &text_bounds, DT_SINGLELINE | DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
+            if (state.draft.osd_layout == OsdLayout::horizontal) {
+                SIZE size{};
+                GetTextExtentPoint32W(item.hDC, text.data(), static_cast<int>(text.size()), &size);
+                x += size.cx + gap;
+                if (x >= surface.right - Scale(state, 30)) break;
+            } else {
+                y += line_height + gap;
+                if (y >= surface.bottom - graph_height - line_height) break;
+            }
+            previous_group = display_item.group;
+            first = false;
+        }
+        if (graph_height != 0) {
+            const auto graph_top = surface.bottom - graph_height + Scale(state, 4);
+            const auto grid_pen = CreatePen(PS_SOLID, 1, WinColor(state.palette.line));
+            const auto old_pen = SelectObject(item.hDC, grid_pen);
+            for (int grid{}; grid < 3; ++grid) {
+                const auto gy = graph_top + grid * std::max(1, graph_height / 3);
+                MoveToEx(item.hDC, surface.left + Scale(state, 6), gy, nullptr);
+                LineTo(item.hDC, surface.right - Scale(state, 6), gy);
+            }
+            SelectObject(item.hDC, old_pen);
+            DeleteObject(grid_pen);
+            const auto graph_pen = CreatePen(PS_SOLID, Scale(state, static_cast<int>(state.draft.osd_graph_line_thickness_px)), WinColor(state.draft.osd_graph_colors_rgb[0]));
+            const auto previous_pen = SelectObject(item.hDC, graph_pen);
+            const auto left = surface.left + Scale(state, 6);
+            const auto width = std::max(1, static_cast<int>(surface.right - left) - Scale(state, 6));
+            for (int px{}; px < width; ++px) {
+                const auto wave = std::sin(static_cast<double>(px) * 0.12) * static_cast<double>(graph_height) * 0.22;
+                const auto gy = graph_top + graph_height / 2 - static_cast<int>(wave);
+                if (px == 0) MoveToEx(item.hDC, left, gy, nullptr); else LineTo(item.hDC, left + px, gy);
+            }
+            SelectObject(item.hDC, previous_pen);
+            DeleteObject(graph_pen);
+        }
+        SetBkMode(item.hDC, previous_mode);
+        SelectObject(item.hDC, previous_font);
+        DeleteObject(font);
+    };
+
+    draw_surface(hardware_items, state.draft.osd_position, false);
+    draw_surface(fps_items, state.draft.fps_osd_position, true);
+}
+
 void DrawOwnerItem(DialogState& state, const DRAWITEMSTRUCT& item) noexcept {
     if (item.hDC == nullptr) return;
     const auto selected = (item.itemState & ODS_SELECTED) != 0U;
@@ -977,6 +1194,11 @@ void DrawOwnerItem(DialogState& state, const DRAWITEMSTRUCT& item) noexcept {
     const auto disabled = (item.itemState & ODS_DISABLED) != 0U;
     auto bounds = item.rcItem;
     std::wstring text;
+
+    if (item.CtlType == ODT_STATIC && item.hwndItem == state.osd_preview) {
+        DrawOsdPreview(state, item);
+        return;
+    }
 
     if (item.CtlType == ODT_TAB) {
         std::array<wchar_t, 128U> buffer{};
@@ -1057,6 +1279,7 @@ void PreviewPalette(DialogState& state) noexcept {
     static_cast<void>(DwmSetWindowAttribute(state.window, 20U, &dark, sizeof(dark)));
     static_cast<void>(SetWindowTheme(state.window, state.draft.theme != Theme::light ? L"DarkMode_Explorer" : L"Explorer", nullptr));
     Relayout(state);
+    if (state.osd_preview != nullptr) InvalidateRect(state.osd_preview, nullptr, TRUE);
     RedrawWindow(state.window, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_FRAME);
 }
 
@@ -1139,6 +1362,17 @@ LRESULT CALLBACK WindowProcedure(const HWND window, const UINT message, const WP
         return 0;
     }
     case WM_COMMAND:
+        if (LOWORD(wparam) == kSettingsResetMinMaxCommand) {
+            static_cast<void>(SendMessageW(state->owner, WM_COMMAND, kCommandResetMinMax, 0));
+            MessageBoxW(window, L"Minimum and maximum values will restart with the next sensor update.", L"Reset Min/Max", MB_OK | MB_ICONINFORMATION);
+            return 0;
+        }
+        if (HIWORD(wparam) == LBN_SELCHANGE && reinterpret_cast<HWND>(lparam) == state->sensor_list) {
+            ReadControls(*state);
+            RebuildOsdOrderList(*state);
+            InvalidateRect(state->osd_preview, nullptr, TRUE);
+            return 0;
+        }
         if (HIWORD(wparam) == LBN_SELCHANGE && reinterpret_cast<HWND>(lparam) == state->graph_sources) {
             EnforceGraphSelection(*state);
             return 0;
@@ -1157,6 +1391,13 @@ LRESULT CALLBACK WindowProcedure(const HWND window, const UINT message, const WP
         }
         if (HIWORD(wparam) == BN_CLICKED && reinterpret_cast<HWND>(lparam) == state->high_contrast) {
             PreviewPalette(*state);
+            return 0;
+        }
+        if ((HIWORD(wparam) == CBN_SELCHANGE || HIWORD(wparam) == BN_CLICKED)
+            && reinterpret_cast<HWND>(lparam) != nullptr
+            && !IsPushButton(*state, reinterpret_cast<HWND>(lparam))) {
+            ReadControls(*state);
+            InvalidateRect(state->osd_preview, nullptr, TRUE);
             return 0;
         }
         if (LOWORD(wparam) == kSettingsExportCommand) {
@@ -1213,7 +1454,11 @@ LRESULT CALLBACK WindowProcedure(const HWND window, const UINT message, const WP
         return TRUE;
     case WM_NOTIFY:
         if (reinterpret_cast<NMHDR*>(lparam)->idFrom == kTabs && reinterpret_cast<NMHDR*>(lparam)->code == TCN_SELCHANGE) {
-            ShowPage(*state, TabCtrl_GetCurSel(state->tabs));
+            ReadControls(*state);
+            const auto page = TabCtrl_GetCurSel(state->tabs);
+            if (page == 1) RebuildOsdOrderList(*state);
+            ShowPage(*state, page);
+            if (page == 1) InvalidateRect(state->osd_preview, nullptr, TRUE);
             return 0;
         }
         break;

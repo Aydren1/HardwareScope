@@ -9,7 +9,11 @@
 
 namespace {
 
+#if HARDWARESCOPE_INTERNAL_TEST_HOOKS
+constexpr wchar_t kInstanceMutex[] = L"Local\\HardwareScope.2.0.Instrumented";
+#else
 constexpr wchar_t kInstanceMutex[] = L"Local\\HardwareScope.2.0";
+#endif
 
 void ActivateExistingInstance() noexcept {
     if (const auto existing = FindWindowW(hardwarescope::NativeWindow::kWindowClass, nullptr); existing != nullptr) {

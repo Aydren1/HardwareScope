@@ -52,6 +52,8 @@ public:
 
     void Start(std::chrono::milliseconds interval = std::chrono::milliseconds{500});
     void ConfigureFps(bool enabled, bool game_only, std::uint32_t refresh_interval_ms, std::uint32_t smoothing_interval_ms) noexcept;
+    void ConfigureMinMaxReset(bool on_game_launch, std::uint32_t interval_minutes) noexcept;
+    void RequestMinMaxReset() noexcept;
     void Stop() noexcept;
     [[nodiscard]] bool Running() const noexcept;
     [[nodiscard]] PrivilegedSensorStatus PrivilegedStatus() const noexcept;
@@ -78,6 +80,7 @@ private:
     std::jthread thread_{};
     std::atomic<bool> running_{};
     std::atomic<PrivilegedSensorStatus> privileged_status_{PrivilegedSensorStatus::starting};
+    std::atomic<bool> reset_history_requested_{};
     AmdGpuProvider amd_gpu_provider_{};
     NvidiaGpuProvider nvidia_provider_{};
     PrivilegedSensorCollector privileged_collector_{};
@@ -90,6 +93,8 @@ private:
     bool fps_game_only_{true};
     std::uint32_t fps_refresh_interval_ms_{100U};
     std::uint32_t fps_smoothing_interval_ms_{500U};
+    bool reset_min_max_on_game_launch_{};
+    std::uint32_t reset_min_max_interval_minutes_{};
     std::unique_ptr<Workspace> workspace_;
 };
 

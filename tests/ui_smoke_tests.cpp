@@ -69,6 +69,47 @@ LPARAM ScreenPointParameter(const int x, const int y) noexcept {
     return MAKELPARAM(static_cast<short>(x), static_cast<short>(y));
 }
 
+struct WindowSearch final {
+    const wchar_t* class_name{};
+    const wchar_t* title{};
+    DWORD process_id{};
+    HWND result{};
+};
+
+BOOL CALLBACK FindProcessWindow(const HWND window, const LPARAM context) noexcept {
+    auto& search = *reinterpret_cast<WindowSearch*>(context);
+    std::array<wchar_t, 128U> class_name{};
+    std::array<wchar_t, 256U> title{};
+    DWORD process_id{};
+    static_cast<void>(GetWindowThreadProcessId(window, &process_id));
+    static_cast<void>(GetClassNameW(window, class_name.data(), static_cast<int>(class_name.size())));
+    static_cast<void>(GetWindowTextW(window, title.data(), static_cast<int>(title.size())));
+    if (process_id == search.process_id
+        && (search.class_name == nullptr || wcscmp(class_name.data(), search.class_name) == 0)
+        && (search.title == nullptr || wcscmp(title.data(), search.title) == 0)) {
+        search.result = window;
+        return FALSE;
+    }
+    return TRUE;
+}
+
+HWND ProcessWindow(const wchar_t* class_name, const wchar_t* title, const DWORD process_id) noexcept {
+    WindowSearch search{class_name, title, process_id, nullptr};
+    static_cast<void>(EnumWindows(&FindProcessWindow, reinterpret_cast<LPARAM>(&search)));
+    return search.result;
+}
+
+BOOL CALLBACK FindInstrumentedWindow(const HWND window, const LPARAM context) noexcept {
+    std::array<wchar_t, 128U> class_name{};
+    static_cast<void>(GetClassNameW(window, class_name.data(), static_cast<int>(class_name.size())));
+    if (wcscmp(class_name.data(), kWindowClass) == 0
+        && SendMessageW(window, hardwarescope::kDisableAutomaticUpdateTestMessage, 0U, 0U) == 1) {
+        *reinterpret_cast<HWND*>(context) = window;
+        return FALSE;
+    }
+    return TRUE;
+}
+
 } // namespace
 
 int wmain(const int argument_count, wchar_t** arguments) {
@@ -113,7 +154,8 @@ int wmain(const int argument_count, wchar_t** arguments) {
         }
     } destroy_progress{progress_window};
 
-    const auto window = FindWindowW(kWindowClass, nullptr);
+    HWND window{};
+    static_cast<void>(EnumWindows(&FindInstrumentedWindow, reinterpret_cast<LPARAM>(&window)));
     if (window == nullptr) {
         std::cerr << "FAIL: HardwareScope native window is not running\n";
         return 1;
@@ -161,7 +203,9 @@ int wmain(const int argument_count, wchar_t** arguments) {
         HWND settings{};
         for (int attempt = 0; attempt < 120 && settings == nullptr; ++attempt) {
             Sleep(25U);
-            settings = FindWindowW(kSettingsWindowClass, nullptr);
+            DWORD process_id{};
+            static_cast<void>(GetWindowThreadProcessId(window, &process_id));
+            settings = ProcessWindow(kSettingsWindowClass, nullptr, process_id);
         }
         if (settings == nullptr) {
             std::cerr << "FAIL: packaged Settings window did not open for hook-boundary validation\n";
@@ -369,7 +413,9 @@ int wmain(const int argument_count, wchar_t** arguments) {
     }
     std::cout << "OK: minimize-to-tray hides the taskbar window and tray open restores it\n";
 
-    const auto osd = FindWindowW(kOsdWindowClass, nullptr);
+    DWORD application_process_id{};
+    static_cast<void>(GetWindowThreadProcessId(window, &application_process_id));
+    const auto osd = ProcessWindow(kOsdWindowClass, nullptr, application_process_id);
     if (osd == nullptr || !IsWindowVisible(osd)) {
         std::cerr << "FAIL: default native OSD is not visible after a sensor snapshot\n";
         return 1;
@@ -405,7 +451,7 @@ int wmain(const int argument_count, wchar_t** arguments) {
         return 1;
     }
     Sleep(250U);
-    const auto graph_window = FindWindowW(kGraphWindowClass, nullptr);
+    const auto graph_window = ProcessWindow(kGraphWindowClass, nullptr, application_process_id);
     RECT floating_bounds{};
     if (graph_window == nullptr || !IsWindowVisible(graph_window)
         || !GetWindowRect(graph_window, &floating_bounds)
@@ -458,7 +504,7 @@ int wmain(const int argument_count, wchar_t** arguments) {
     bool modal_ready{};
     for (int attempt = 0; attempt < 100 && !modal_ready; ++attempt) {
         Sleep(50U);
-        settings = FindWindowW(kSettingsWindowClass, nullptr);
+        settings = ProcessWindow(kSettingsWindowClass, nullptr, application_process_id);
         modal_ready = settings != nullptr && IsWindowVisible(settings) && !IsWindowEnabled(window);
     }
     if (!modal_ready) {
@@ -587,7 +633,7 @@ int wmain(const int argument_count, wchar_t** arguments) {
         settings = nullptr;
         for (int attempt = 0; attempt < 400 && (settings == nullptr || !IsWindowVisible(settings)); ++attempt) {
             Sleep(25U);
-            settings = FindWindowW(kSettingsWindowClass, nullptr);
+            settings = ProcessWindow(kSettingsWindowClass, nullptr, application_process_id);
         }
         if (settings == nullptr || !IsWindowVisible(settings)) {
             CloseHandle(process);

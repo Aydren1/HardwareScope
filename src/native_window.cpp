@@ -35,7 +35,11 @@ constexpr float kFavoriteSlotWidth = 25.0F;
 constexpr float kTableTop = 118.0F;
 constexpr float kColumnHeaderHeight = 29.0F;
 constexpr float kSensorRowHeight = 31.0F;
+#if HARDWARESCOPE_INTERNAL_TEST_HOOKS
+const GUID kTrayIconGuid{0xC937D2E1, 0x3FC1, 0x4F21, {0xA9, 0x77, 0x48, 0x46, 0x26, 0x19, 0x7D, 0x91}};
+#else
 const GUID kTrayIconGuid{0xE58BB907, 0x9AEF, 0x4E50, {0x9D, 0x2F, 0x5A, 0x65, 0xB4, 0xB4, 0x2D, 0x40}};
+#endif
 
 D2D1_RECT_F FavoritesButtonBounds(const D2D1_SIZE_F size) noexcept {
     const auto right = std::max(kContentInset + kFavoritesButtonWidth, size.width - kContentInset);
@@ -228,6 +232,10 @@ NativeWindow::NativeWindow(const HINSTANCE instance) noexcept
         }
     }
     first_run_ = !settings_.onboarding_completed;
+#if HARDWARESCOPE_INTERNAL_TEST_HOOKS
+    settings_.start_minimized = false;
+    first_run_ = false;
+#endif
     collapsed_sections_ = settings_.collapsed_sections;
     palette_ = PaletteFor(settings_.theme, settings_.text_color_rgb, settings_.high_contrast);
     sensor_worker_.ConfigureFps(
@@ -235,6 +243,9 @@ NativeWindow::NativeWindow(const HINSTANCE instance) noexcept
         settings_.fps_game_only,
         settings_.fps_refresh_interval_ms,
         settings_.fps_smoothing_interval_ms);
+    sensor_worker_.ConfigureMinMaxReset(
+        settings_.reset_min_max_on_game_launch,
+        settings_.reset_min_max_interval_minutes);
 }
 
 NativeWindow::~NativeWindow() {
@@ -256,6 +267,7 @@ int NativeWindow::Run(const int show_command) {
     if (!RegisterWindowClass()) return 12;
     if (!CreateNativeWindow(show_command)) return 13;
 
+    if (settings_.reset_min_max_on_startup) sensor_worker_.RequestMinMaxReset();
     sensor_worker_.Start(std::chrono::milliseconds{settings_.refresh_interval_ms});
     if (first_run_) ShowFirstRunSetup();
     MSG message{};
@@ -1327,6 +1339,7 @@ void NativeWindow::ShowTrayMenu() noexcept {
         static_cast<void>(AppendMenuW(menu, MF_STRING, kCommandInstallUpdate, update_text));
     }
     static_cast<void>(AppendMenuW(menu, MF_STRING | (settings_.show_osd ? MF_CHECKED : MF_UNCHECKED), kCommandToggleOsd, L"Show on-screen display"));
+    static_cast<void>(AppendMenuW(menu, MF_STRING, kCommandResetMinMax, L"Reset Min/Max"));
     static_cast<void>(AppendMenuW(menu, MF_STRING, kCommandSettings, L"Settings…"));
     static_cast<void>(AppendMenuW(menu, MF_SEPARATOR, 0U, nullptr));
     static_cast<void>(AppendMenuW(menu, MF_STRING, kCommandExit, L"Exit"));
@@ -1343,6 +1356,9 @@ void NativeWindow::HandleCommand(const int command) noexcept {
     if (command == kCommandOpen) RestoreFromTray();
     else if (command == kCommandInstallUpdate) PromptForPendingUpdate();
     else if (command == kCommandSettings) ShowSettings();
+    else if (command == kCommandResetMinMax) {
+        sensor_worker_.RequestMinMaxReset();
+    }
     else if (command == kCommandToggleOsd) {
         settings_.show_osd = !settings_.show_osd;
         osd_window_.SetVisible(settings_.show_osd);
@@ -1371,6 +1387,9 @@ void NativeWindow::ShowSettings() noexcept {
         settings_.fps_game_only,
         settings_.fps_refresh_interval_ms,
         settings_.fps_smoothing_interval_ms);
+    sensor_worker_.ConfigureMinMaxReset(
+        settings_.reset_min_max_on_game_launch,
+        settings_.reset_min_max_interval_minutes);
     if (!suspended_) sensor_worker_.Start(std::chrono::milliseconds{settings_.refresh_interval_ms});
     ScheduleAutomaticUpdateCheck();
     DiscardDeviceResources();

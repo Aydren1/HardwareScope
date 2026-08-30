@@ -124,6 +124,16 @@ std::vector<OsdDisplayItem> BuildOsdDisplayItems(const SensorSnapshot& snapshot,
             }
         }
     }
+    if (settings.osd_sensor_order_count != 0U) {
+        std::stable_sort(items.begin(), items.end(), [&](const OsdDisplayItem& left, const OsdDisplayItem& right) {
+            if (left.fps != right.fps) return left.fps;
+            if (left.fps) return false;
+            const auto ordered_end = settings.osd_sensor_order_ids.begin() + settings.osd_sensor_order_count;
+            const auto left_order = std::find(settings.osd_sensor_order_ids.begin(), ordered_end, left.sensor_id);
+            const auto right_order = std::find(settings.osd_sensor_order_ids.begin(), ordered_end, right.sensor_id);
+            return left_order < right_order;
+        });
+    }
     return items;
 }
 

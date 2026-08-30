@@ -4,6 +4,7 @@
 #include "hardwarescope/app_commands.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -83,6 +84,17 @@ bool Responsive(const HWND window) noexcept {
     return SendMessageTimeoutW(window, WM_NULL, 0U, 0U, SMTO_ABORTIFHUNG, 2'000U, &ignored) != 0U;
 }
 
+BOOL CALLBACK FindInstrumentedWindow(const HWND window, const LPARAM context) noexcept {
+    std::array<wchar_t, 128U> class_name{};
+    static_cast<void>(GetClassNameW(window, class_name.data(), static_cast<int>(class_name.size())));
+    if (wcscmp(class_name.data(), kMainWindowClass) == 0
+        && SendMessageW(window, hardwarescope::kDisableAutomaticUpdateTestMessage, 0U, 0U) == 1) {
+        *reinterpret_cast<HWND*>(context) = window;
+        return FALSE;
+    }
+    return TRUE;
+}
+
 bool CycleSettings(const HWND main_window) noexcept {
     static_cast<void>(PostMessageW(main_window, WM_COMMAND, hardwarescope::kCommandSettings, 0U));
     HWND settings{};
@@ -131,7 +143,9 @@ int wmain(const int argument_count, wchar_t** arguments) {
     }
     const auto strict_resources = duration_seconds >= 300UL;
 
-    const auto window = FindWindowW(kMainWindowClass, nullptr);
+    HWND window{};
+    if (production_mode) window = FindWindowW(kMainWindowClass, nullptr);
+    else static_cast<void>(EnumWindows(&FindInstrumentedWindow, reinterpret_cast<LPARAM>(&window)));
     if (window == nullptr) {
         std::cerr << "FAIL: HardwareScope native window is not running\n";
         return 1;
